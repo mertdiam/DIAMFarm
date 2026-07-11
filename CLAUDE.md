@@ -177,3 +177,4 @@ This clone is DIAM's internal fork (github.com/mertdiam/print-farm-manager). Eve
 ## Decisions Log
 
 - 2026-07-11: Forked upstream at commit a2ccb74c5213b1a54f2369dac8d44e2751dad64a. Bambu-only launch scope. Klipper/K2/Giga/OctoPrint/Prusa/Elegoo paths deferred to Phase 4 (accepted risk: unvalidated at fork time). Phase 0 audit and hardware validation gate all feature work.
+- 2026-07-11: Model routing fixed per Mert: Haiku for simple/mechanical tasks, Sonnet for medium (docs, specs, first-pass review), Opus for code implementation, Fable as advisor/orchestrator only. Token efficiency is a standing requirement; verification fan-outs sized to risk (two skeptics for Critical findings, one for Should-fix).
