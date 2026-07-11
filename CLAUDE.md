@@ -161,3 +161,19 @@ Default philosophy when torn between inferring and asking the operator (in produ
 - `/ship`: finishing pass for any change (tests, docs, changelog, dash check, commit).
 - `/add-connector`: scaffold and register a new printer brand driver end to end.
 - `/pr-review`: review a community PR with this repo's specific failure modes in mind.
+
+## Internal Fork Rules (DIAM fork; see PLAN.md + TASKS.md)
+
+This clone is DIAM's internal fork (github.com/mertdiam/print-farm-manager). Everything above this section is upstream's operating manual and still applies in full. These rules add to it:
+
+- Read PLAN.md before any work. Only work from a task brief in TASKS.md; if no brief covers the request, stop and say so.
+- Launch scope is Bambu-only (X1C/P1S control, P2S and H2D to prove). Do not delete or modify other brands' drivers; untouched upstream code preserves clean cherry-picking.
+- Never touch server/scheduler.js, server/db.js, or server/drivers/* unless the brief names them.
+- Branches: main tracks upstream, production is deployed, feature branches per task merged via small PRs.
+- Run npm test before every commit. Failing tests block commits.
+- Generic fixes (driver patches, header parser) get offered upstream as PRs once proven.
+- Append every significant decision to the Decisions Log below.
+
+## Decisions Log
+
+- 2026-07-11: Forked upstream at commit a2ccb74c5213b1a54f2369dac8d44e2751dad64a. Bambu-only launch scope. Klipper/K2/Giga/OctoPrint/Prusa/Elegoo paths deferred to Phase 4 (accepted risk: unvalidated at fork time). Phase 0 audit and hardware validation gate all feature work.
