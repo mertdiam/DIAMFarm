@@ -35,6 +35,15 @@ FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 
+# gosu drops privileges cleanly in the entrypoint (see docker-entrypoint.sh);
+# it is a tiny, purpose-built setuid helper packaged in Debian. A fixed uid/gid
+# is used (not the base image's implicit "node" user) so it is explicit and
+# matches any one-time volume chown documented in the deploy notes.
+RUN apt-get update && apt-get install -y --no-install-recommends gosu \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 farmapp \
+    && useradd --uid 10001 --gid farmapp --shell /usr/sbin/nologin --no-create-home farmapp
+
 COPY package.json ./
 COPY --from=server-deps /app/node_modules ./node_modules
 COPY server ./server
@@ -42,12 +51,23 @@ COPY server ./server
 # image: the first-admin seed runs inside the deployed container's terminal.
 COPY scripts ./scripts
 COPY --from=client-build /app/client/dist ./client/dist
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
 
-# Persistent state — mount volumes here in production (see docker-compose.yml)
-RUN mkdir -p server/data server/gcode
+# Persistent state, mount volumes here in production (see docker-compose.yml).
+# chown seeds ownership for a brand new empty volume; an already-populated
+# root-owned volume is fixed at container start by the entrypoint instead.
+RUN mkdir -p server/data server/gcode \
+    && chown -R farmapp:farmapp server/data server/gcode
 
 EXPOSE 3000
 
+# Detect a hung-but-listening process (event loop wedged, no crash). Node's
+# built-in fetch is used because bookworm-slim ships neither curl nor wget.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+
+# Entrypoint starts as root only to chown the volumes, then execs as farmapp.
+ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]
 CMD ["node", "server/index.js"]
 
 # ---- Stage 4: development -------------------------------------------------

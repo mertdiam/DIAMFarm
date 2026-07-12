@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-07-12: Run the container as a non-root user, add a healthcheck
+
+Two hardening items the Phase 0 audit flagged as Should-fix. The runtime image
+ran as root and had no HEALTHCHECK, so Coolify could not tell a hung-but-running
+server from a healthy one and a container compromise had root in the container.
+
+The app now runs as an unprivileged user (uid 10001, farmapp). The wrinkle is
+that the persistent volumes (server/data holds farm.db and backups, server/gcode
+holds uploads) were populated by the previous root-run image and are root-owned;
+a plain USER switch would EACCES on the first write and, because /api/health
+touches no disk, would pass the healthcheck and only fail later on a backup or
+dispatch. To avoid that and to need no manual host action, the container starts
+as root, an entrypoint chowns the two volume paths to farmapp, then drops
+privileges with gosu and execs the server. Fresh volumes are handled by an
+image-time chown. A HEALTHCHECK now hits the app's own /api/health via Node's
+built-in fetch (bookworm-slim has neither curl nor wget).
+
+### Changes
+- Dockerfile: install gosu, create the farmapp user (uid/gid 10001), add a
+  HEALTHCHECK, and switch the runtime entrypoint to the drop-privileges script.
+- docker-entrypoint.sh: new. Chowns the persistent volumes then execs as farmapp.
+- CLAUDE.md: correct the Tailscale funnel hostname to the renamed tailnet
+  (diamcore.corn-codlet.ts.net); the funnel still does not resolve, so CI
+  auto-deploy stays parked.
+
+---
+
 ## 2026-07-12: Ship operational scripts in the production image
 
 Seeding the first admin failed on the deployed Coolify container with
