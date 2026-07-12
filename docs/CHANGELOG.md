@@ -166,6 +166,31 @@ These are all mocked-transport tests (no hardware); they prove the scheduler con
 - docs/CHANGELOG.md: this entry.
 
 ---
+## 2026-07-11: persisted group registry, plus project-level group targeting
+
+Joel found that printer groups could silently vanish: he set a G-code's `allowed_groups` to a group, then reassigned every printer in that group elsewhere. Every "list of known groups" in the app derived live from `SELECT DISTINCT group_name FROM printers`, so the group disappeared from the G-code editor's picker the moment no printer carried it anymore, showing nothing selected. The restriction wasn't actually gone though: the scheduler's `json_each(gcodes.allowed_groups)` check still enforced the old name, so the G-code silently became permanently undispatchable, not unrestricted as it appeared.
+
+Fixed by promoting groups to a persisted registry (`printer_groups`), independent of which printers currently carry a given name, mirroring the existing `printer_models` table. Groups auto-register the moment a name is typed on a printer (create, update, bulk-edit, or CSV import), so there's no added setup friction, and every picker now reads from the registry instead of deriving live from the printers table. A group can still be deleted for cleanup, but only once nothing (an active printer, a G-code, or a project) references it anymore.
+
+While in there, added the capability Joel wanted alongside the fix: a project-level `allowed_groups` default that cascades to every G-code in the project without its own override, mirroring the existing `required_material`/`required_color` project-to-gcode cascade exactly (`COALESCE(gcodes.X, projects.X)` in the scheduler's dispatch query and the `dispatch-status` diagnostic).
+
+Neither change touches `completed_qty`, and neither implements multi-group printers (still one `group_name` per printer, per the earlier decision against that feature).
+
+### Changes
+- `server/db.js`: new `printer_groups` table (`name TEXT PRIMARY KEY, created_at`); new `projects.allowed_groups` column; a startup seed migration that backfills the registry from every group name currently referenced anywhere (`printers.group_name`, and every name inside any `gcodes`/`projects` `allowed_groups` JSON array), so an existing install recovers an orphaned-but-referenced group on upgrade.
+- `server/routes/groups.js`: new file, `GET`/`POST`/`DELETE /api/groups`. Delete is blocked (`409`) while an active printer, a G-code's `allowed_groups`, or a project's `allowed_groups` still references the name.
+- `server/routes/printers.js`: removed `GET /groups` (replaced by `GET /api/groups`); `POST /`, `PUT /:id`, and CSV import now silently register a new `group_name` into `printer_groups`. Each auto-register call is wrapped in its own try/catch so a failure there can never turn an already-committed printer write into a reported error; verified by forcing the insert to fail (a `printer_groups` trigger raising `ABORT`) and confirming the printer create still returns `201` with the row actually persisted.
+- `server/scheduler.js`: dispatch-candidate group clause changed to `COALESCE(gcodes.allowed_groups, projects.allowed_groups)`, matching the material/color pattern.
+- `server/routes/parts.js`: `dispatch-status` diagnostic mirrors the same cascade (`gc.allowed_groups || project_allowed_groups`).
+- `server/routes/projects.js`: new `PUT /api/projects/:id/groups`, mirroring the existing `PUT /api/projects/:id/filament`.
+- `client/src/pages/Projects.jsx`: G-code and new project-level group pickers now read `GET /api/groups` (model-independent) instead of the removed per-model `GET /api/printers/groups`; added the project-level group defaults block and a "inherits project: X" empty-state hint on the per-gcode picker.
+- `client/src/pages/Settings.jsx`: new Groups management section (list, add, delete with in-use error); Add Printer form's Group field is now a registry-backed `<datalist>`.
+- `client/src/pages/Printers.jsx`, `client/src/pages/PrinterDetail.jsx`: Group fields' `<datalist>` autocomplete now sourced from the registry instead of derived from currently-loaded printers.
+- `server/routes/backup.js`: `printer_groups` added to export/restore, following the `printer_models` pattern exactly (no FK, absent from the `sqlite_sequence` resync list).
+- New `server/tests/groups.test.js`, `server/tests/dispatch-status.test.js`, `server/tests/projects-groups.test.js`; extended `server/tests/printers-filaments.test.js`, `server/tests/backup-restore.test.js`, `server/tests/scheduler-targeting.test.js` with the registry and cascade behavior.
+- `docs/database.md`, `docs/api.md`, `docs/web-app.md`: documented `printer_groups`, the new endpoints, and the targeting cascade (which also closed a pre-existing gap: `gcodes.allowed_groups`/`required_material`/`required_color` were live but undocumented before this).
+
+Server-side and display logic only, no driver code touched; nothing here requires hardware validation beyond the existing dispatch-eligibility test coverage.
 
 ## 2026-07-07 — Dockerized development workflow (`dev` profile)
 

@@ -29,6 +29,7 @@ const backupRouter       = require('./routes/backup')(db);
 const dashboardRouter    = require('./routes/dashboard')(db);
 const settingsRouter     = require('./routes/settings')(db);
 const modelsRouter       = require('./routes/models')(db);
+const groupsRouter       = require('./routes/groups')(db);
 const filamentsRouter    = require('./routes/filaments')(db);
 const printerJobsRouter  = require('./routes/printer-jobs')(db);
 
@@ -85,6 +86,8 @@ let server;
     ['post',   '/api/printers/:id/decommission'],
     ['post',   '/api/printers/:id/complete-and-decommission'],
     ['post',   '/api/printers/:id/recommission'],
+    ['post',   '/api/groups'],
+    ['delete', '/api/groups/:name'],
     ['post',   '/api/models'],
     ['delete', '/api/models/:model_id'],
     ['post',   '/api/filaments/types'],
@@ -107,6 +110,7 @@ let server;
   app.use('/api/dashboard',       dashboardRouter);
   app.use('/api/settings',        settingsRouter);
   app.use('/api/models',          modelsRouter);
+  app.use('/api/groups',          groupsRouter);
   app.use('/api/filaments',       filamentsRouter);
 
 // Server notifications — surfaced in the Settings UI
