@@ -245,4 +245,75 @@ try {
   }
 } catch (_) {}
 
+// Better Auth tables (user, session, account, verification) plus the admin plugin's
+// added columns (user.role/banned/banReason/banExpires, session.impersonatedBy).
+//
+// These are created here in the house CREATE TABLE IF NOT EXISTS pattern rather than by
+// Better Auth's migration CLI, so deploys need no runtime dependency on that CLI: a plain
+// `git pull` plus server restart applies them exactly like every other table. The DDL is a
+// hand-translation of `npx auth@1.6.23 generate` output; the reference SQL is committed at
+// docs/internal/better-auth-schema.sql. Column names keep Better Auth's exact quoted
+// camelCase because its Kysely adapter references them verbatim. Better Auth reads and
+// writes these tables through the same better-sqlite3 handle exported below (auth.mjs
+// imports this module), so backup/restore of the SQLite file covers them; the JSON backup
+// bundle intentionally omits them (it must never carry password hashes or session tokens).
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS "user" (
+      "id"            TEXT NOT NULL PRIMARY KEY,
+      "name"          TEXT NOT NULL,
+      "email"         TEXT NOT NULL UNIQUE,
+      "emailVerified" INTEGER NOT NULL,
+      "image"         TEXT,
+      "createdAt"     DATE NOT NULL,
+      "updatedAt"     DATE NOT NULL,
+      "role"          TEXT,
+      "banned"        INTEGER,
+      "banReason"     TEXT,
+      "banExpires"    DATE
+    );
+
+    CREATE TABLE IF NOT EXISTS "session" (
+      "id"             TEXT NOT NULL PRIMARY KEY,
+      "expiresAt"      DATE NOT NULL,
+      "token"          TEXT NOT NULL UNIQUE,
+      "createdAt"      DATE NOT NULL,
+      "updatedAt"      DATE NOT NULL,
+      "ipAddress"      TEXT,
+      "userAgent"      TEXT,
+      "userId"         TEXT NOT NULL REFERENCES "user" ("id") ON DELETE CASCADE,
+      "impersonatedBy" TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS "account" (
+      "id"                    TEXT NOT NULL PRIMARY KEY,
+      "accountId"             TEXT NOT NULL,
+      "providerId"            TEXT NOT NULL,
+      "userId"                TEXT NOT NULL REFERENCES "user" ("id") ON DELETE CASCADE,
+      "accessToken"           TEXT,
+      "refreshToken"          TEXT,
+      "idToken"               TEXT,
+      "accessTokenExpiresAt"  DATE,
+      "refreshTokenExpiresAt" DATE,
+      "scope"                 TEXT,
+      "password"              TEXT,
+      "createdAt"             DATE NOT NULL,
+      "updatedAt"             DATE NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS "verification" (
+      "id"         TEXT NOT NULL PRIMARY KEY,
+      "identifier" TEXT NOT NULL,
+      "value"      TEXT NOT NULL,
+      "expiresAt"  DATE NOT NULL,
+      "createdAt"  DATE NOT NULL,
+      "updatedAt"  DATE NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS "session_userId_idx" ON "session" ("userId");
+    CREATE INDEX IF NOT EXISTS "account_userId_idx" ON "account" ("userId");
+    CREATE INDEX IF NOT EXISTS "verification_identifier_idx" ON "verification" ("identifier");
+  `);
+} catch (_) {}
+
 module.exports = db;
