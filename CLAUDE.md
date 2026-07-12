@@ -164,7 +164,7 @@ Default philosophy when torn between inferring and asking the operator (in produ
 
 ## Internal Fork Rules (DIAM fork; see PLAN.md + TASKS.md)
 
-This clone is DIAM's internal fork (github.com/mertdiam/print-farm-manager). Everything above this section is upstream's operating manual and still applies in full. These rules add to it:
+This clone is DIAM's internal fork, named DIAMFarm (github.com/mertdiam/DIAMFarm). Everything above this section is upstream's operating manual and still applies in full. These rules add to it:
 
 - Read PLAN.md before any work. Only work from a task brief in TASKS.md; if no brief covers the request, stop and say so.
 - Launch scope is Bambu-only (X1C/P1S control, P2S and H2D to prove). Do not delete or modify other brands' drivers; untouched upstream code preserves clean cherry-picking.
