@@ -2,6 +2,24 @@
 
 ---
 
+## 2026-07-12: Fix Docker build ERESOLVE on better-auth peer dependency
+
+The production Docker build failed at the first `npm ci` (deps stage) with an
+ERESOLVE error: better-auth 1.6.23 declares an optional better-sqlite3 ^12 peer
+while this repo pins better-sqlite3 9.6.0. The repo carries `.npmrc` files with
+`legacy-peer-deps=true` to accept this, but the Dockerfile copied only
+package.json and package-lock.json before running `npm ci`, so `.npmrc` was not
+in the build context and npm re-resolved peers strictly and failed. Reproduced
+locally: root `npm ci` fails without `.npmrc` and succeeds with it. This blocked
+the first Coolify deploy. The client stage happened to resolve without it, but
+both npm ci steps now get the file for correctness.
+
+### Changes
+- Dockerfile: copy `.npmrc` (root) and `client/.npmrc` into the build context
+  before their respective `npm ci` steps in the deps, client-build, and dev stages.
+
+---
+
 ## 2026-07-12: Audit criticals fix pack (TASK 6)
 
 The internal fork's TASK 6. Closes the four remaining Critical findings from the Phase 0 audit (docs/internal/audit-findings.md) that concern part-count integrity in the set-ready endpoint and the scheduler. All four were phantom-part-credit or dispatch-safety risks, the single most dangerous bug class in this codebase (non-negotiable #1). Mert signed off on the scope per the completed_qty escalation rule before implementation. Method was strictly test-first: each regression test was shown failing against unmodified code before the fix landed.

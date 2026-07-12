@@ -10,7 +10,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
-COPY package.json package-lock.json ./
+# .npmrc carries legacy-peer-deps=true, needed because better-auth declares an
+# optional better-sqlite3 ^12 peer while this repo pins 9.6.0; npm ci ERESOLVEs
+# without it. It must be present before npm ci runs, not just in the repo.
+COPY package.json package-lock.json .npmrc ./
 COPY patches ./patches
 RUN npm ci
 
@@ -22,7 +25,7 @@ RUN npm prune --omit=dev
 # ---- Stage 2: build the React client ---------------------------------------
 FROM node:22-bookworm-slim AS client-build
 WORKDIR /app/client
-COPY client/package.json client/package-lock.json ./
+COPY client/package.json client/package-lock.json client/.npmrc ./
 RUN npm ci
 COPY client/ ./
 RUN npm run build
@@ -59,7 +62,7 @@ CMD ["node", "server/index.js"]
 # bind mount.
 FROM deps AS dev
 WORKDIR /app
-COPY client/package.json client/package-lock.json ./client/
+COPY client/package.json client/package-lock.json client/.npmrc ./client/
 RUN npm ci --prefix client
 
 EXPOSE 3000 5173
