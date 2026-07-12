@@ -2,6 +2,18 @@
 
 ---
 
+## 2026-07-12: Remove upstream donation footer from Settings
+
+Internal fork: the Settings page carried upstream's personal donation footer
+(the maintainer's note plus Buy Me a Coffee and PayPal buttons), which is not
+appropriate on DIAM's internal deployment. Removed the About/donation section.
+The MIT LICENSE file is untouched; this is a UI change only.
+
+### Changes
+- client/src/pages/Settings.jsx: removed the donation and personal-attribution footer.
+
+---
+
 ## 2026-07-12: DIAMFARM brand mark (favicon, sidebar lockup)
 
 Gave the fork its own identity in the DIAM house style (carried from DIAMCORE:
