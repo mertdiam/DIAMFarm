@@ -33,6 +33,33 @@ function resolveModel(rawModel, name) {
   return normalizeModel(rawModel) || inferModel(name);
 }
 
+// Discovery hardening (code-review follow-up on TASK 7). Discovered identity fields
+// (name, serial, ip) originate from whatever answers on the network, so the draft-add
+// path validates shape and bounds length before those values reach the DB, even though
+// the inserts are already parameterised. Field caps are generous, just a sanity ceiling.
+const FIELD_MAX = { name: 60, serial: 64, group_name: 60 };
+// IPv4 with an optional :port (the app stores ip that way for some brands).
+function isValidIpv4(ip) {
+  const m = String(ip).match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?::(\d{1,5}))?$/);
+  if (!m) return false;
+  if ([m[1], m[2], m[3], m[4]].some((o) => Number(o) > 255)) return false;
+  if (m[5] != null && (Number(m[5]) < 1 || Number(m[5]) > 65535)) return false;
+  return true;
+}
+// A range scan may only target a private network (RFC1918 plus the 100.64/10 CGNAT range
+// Tailscale uses). This keeps the server from being pointed at a public /24 as a port
+// scanner. The subnet has already passed discovery.parseSubnet, so a.b.c are valid octets.
+function isPrivateSubnet(subnet) {
+  const m = String(subnet).trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})/);
+  if (!m) return false;
+  const a = Number(m[1]), b = Number(m[2]);
+  if (a === 10) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  return false;
+}
+
 module.exports = (db) => {
   // Silently keeps the printer_groups registry a superset of every group name
   // ever assigned to a printer, so a group can never again vanish from a
@@ -173,6 +200,11 @@ module.exports = (db) => {
           error: 'subnet is required for a scan and must be an IPv4 /24 (e.g. 192.168.1.0/24 or 192.168.1)',
         });
       }
+      if (!isPrivateSubnet(subnet)) {
+        return res.status(400).json({
+          error: 'scan is restricted to private network ranges (10.x, 172.16-31.x, 192.168.x, 100.64-127.x)',
+        });
+      }
       records = await discovery.discoverScan({ subnet });
     } else {
       records = await discovery.discoverSSDP();
@@ -226,6 +258,13 @@ module.exports = (db) => {
 
       if (!name || !ip || !model) {
         return res.status(400).json({ error: 'each printer requires name, ip, and model' });
+      }
+      if (!isValidIpv4(ip)) {
+        return res.status(400).json({ error: `Invalid IP address "${ip}"` });
+      }
+      if (name.length > FIELD_MAX.name || serial.length > FIELD_MAX.serial ||
+          (group_name && group_name.length > FIELD_MAX.group_name)) {
+        return res.status(400).json({ error: 'name, serial, or group is too long' });
       }
       const modelRow = db.prepare('SELECT connector FROM printer_models WHERE model_id = ?').get(model);
       if (!modelRow) {

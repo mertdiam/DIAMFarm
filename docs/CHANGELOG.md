@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-07-12: Harden printer discovery inputs (code-review follow-up)
+
+A review of the TASK 7 discovery feature flagged the seam where untrusted network
+data reaches the database. Discovered identity fields come from whatever answers
+on the network, so the draft-add path now validates the IP is a well-formed IPv4
+(optional port) and bounds name/serial/group length before insert, on top of the
+existing parameterised statements. Separately, a range scan is now restricted to
+private network ranges (RFC1918 plus the 100.64/10 CGNAT range) so the endpoint
+cannot be pointed at a public /24 as a port scanner. Both are admin-only endpoints;
+this is defense in depth, not a fix for an exploited path.
+
+### Changes
+- server/routes/printers.js: validate IPv4 and cap field lengths in /discover/add;
+  restrict /discover scan to private subnets via a new isPrivateSubnet guard.
+- server/tests/printers-discover.test.js: 6 new cases (malformed IP, out-of-range
+  octet, IP-with-port accepted, over-long name, public-subnet 400, private-subnet ok).
+
+---
+
 ## 2026-07-12: Remove upstream donation footer from Settings
 
 Internal fork: the Settings page carried upstream's personal donation footer

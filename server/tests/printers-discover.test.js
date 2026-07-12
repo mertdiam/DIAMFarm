@@ -226,6 +226,61 @@ describe('POST /api/printers/discover/add', () => {
     expect(res.body.api_key).toBeUndefined();   // sanitizePrinter strips it
     expect(res.body.api_key_set).toBe(0);        // and reports "not set"
   });
+
+  // ── Code-review hardening: untrusted discovered fields validated before insert ──
+  test('400 on a malformed IP, and nothing is inserted', async () => {
+    const res = await request(app).post('/api/printers/discover/add').send({
+      printers: [{ name: 'JunkIp', ip: 'not-an-ip; DROP', model: 'x1c' }],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid IP/);
+    expect(db.prepare('SELECT COUNT(*) c FROM printers').get().c).toBe(0);
+  });
+
+  test('400 on an out-of-range IP octet', async () => {
+    const res = await request(app).post('/api/printers/discover/add').send({
+      printers: [{ name: 'BadOctet', ip: '192.168.1.999', model: 'x1c' }],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid IP/);
+  });
+
+  test('accepts an IP with an explicit port', async () => {
+    const res = await request(app).post('/api/printers/discover/add').send({
+      printers: [{ name: 'WithPort', ip: '192.168.1.55:8080', model: 'x1c' }],
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.added).toBe(1);
+  });
+
+  test('400 on an over-long name, and nothing is inserted', async () => {
+    const res = await request(app).post('/api/printers/discover/add').send({
+      printers: [{ name: 'X'.repeat(200), ip: '192.168.1.90', model: 'x1c' }],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/too long/);
+    expect(db.prepare('SELECT COUNT(*) c FROM printers').get().c).toBe(0);
+  });
+});
+
+describe('POST /api/printers/discover scan range restriction', () => {
+  // parseSubnet is mocked (whole module auto-mocked); make it truthy so the route reaches
+  // the real isPrivateSubnet guard in printers.js, which is what these tests exercise.
+  test('400 when the subnet is a public range (port-scan guard)', async () => {
+    discovery.parseSubnet.mockReturnValue(['8.8.8.1']);
+    const res = await request(app).post('/api/printers/discover').send({ method: 'scan', subnet: '8.8.8.0/24' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/private network ranges/);
+    expect(discovery.discoverScan).not.toHaveBeenCalled();
+  });
+
+  test('a private subnet passes the range guard', async () => {
+    discovery.parseSubnet.mockReturnValue(['192.168.45.1']);
+    discovery.discoverScan.mockResolvedValue([]);
+    const res = await request(app).post('/api/printers/discover').send({ method: 'scan', subnet: '192.168.45.0/24' });
+    expect(res.status).toBe(200);
+    expect(discovery.discoverScan).toHaveBeenCalledWith({ subnet: '192.168.45.0/24' });
+  });
 });
 
 // ── Admin gate (mirrors server/index.js ADMIN_ONLY wiring) ─────────────────────
