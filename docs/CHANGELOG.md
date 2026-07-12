@@ -2,6 +2,21 @@
 
 ---
 
+## 2026-07-12: Scheduler dispatch and recovery regression suite
+
+Test-only change, no runtime behavior is modified. This is the internal fork's PR 1: before any of the fork's feature PRs (auth, credential redaction, header parser) touch the codebase, we lock the scheduler's current correct dispatch, hold, and recovery behavior with regression tests so a later change that breaks a safety invariant fails CI instead of shipping. The coverage targets come from the Phase 0 audit gap analysis (docs/internal/audit-findings.md), which flagged the hold gate (finding 33) and the dispatch-lock, ceiling, and restart-recovery paths as the highest untested risks.
+
+Two new suites were added. scheduler-lock.test.js drives _dispatchToPrinter and sweepIdlePrinters directly to assert: a held printer is never dispatched to (including when a stale printer object claims is_held 0 while the DB says held), a single open plate is claimed by exactly one printer even under re-entrant dispatch, parts_per_plate ceiling accounting stops over-dispatch, queue priority and printer-model targeting are respected, and the UPLOAD_CONFLICT retry waits the long 60s window rather than the ordinary 5s. scheduler-recovery.test.js drives the scheduler through its real poller-event wiring (scheduler.start() plus emitted statusChange events) and a fresh scheduler instance standing in for a restart, asserting: a finished job holds the printer with no auto-redispatch before sign-off, a FINISHED latched from before startedAt does not credit completed_qty (the stale-status replay and phantom-part-credit class), a printing job left in the DB completes exactly once on restart with no duplicate credit, and an OFFLINE mid-job stays recoverable (left printing, printer held), auto-unholds on return to PRINTING, and still credits exactly once.
+
+These are all mocked-transport tests (no hardware); they prove the scheduler contract, not any physical printer. Per the fork rules, no scheduler, poller, driver, or db code was touched. The suites deliberately do not assert around the known upstream defects the audit already documented (untracked-FINISHED immediate dispatch, stale-job auto-fail ordering vs _activeUploads, and zombie jobs on decommissioned printers in the ceiling query); those remain open findings for a dedicated fix brief.
+
+### Changes
+- server/tests/scheduler-lock.test.js: new suite covering the hold gate, dispatch lock and single-plate ceiling, queue ordering, model targeting, and UPLOAD_CONFLICT retry timing.
+- server/tests/scheduler-recovery.test.js: new suite covering no-redispatch-before-sign-off, stale-status replay across a restart, restart mid-print completing exactly once, and OFFLINE mid-job recovery.
+- docs/CHANGELOG.md: this entry.
+
+---
+
 ## 2026-07-07 — Dockerized development workflow (`dev` profile)
 
 Following up on issue #15 (developer couldn't get a containerized dev environment running: `ERROR: client/dist/index.html not found` when trying to run the server for local dev) and the maintainer's own admission there that the `Dockerfile` "was just focused on production... I've been lazy to put together a development target" — added a Docker-based alternative to the native `npm run dev` workflow. Purely additive: the native workflow in the README/Installation Guide is unchanged, and the production `docker compose up` path is unchanged (still builds the same `runtime` target it always has, now pinned explicitly).
