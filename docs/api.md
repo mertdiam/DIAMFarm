@@ -345,6 +345,67 @@ The `model` column is optional but strongly recommended. Valid values (case-inse
 
 Each flagged `row` is the uploaded CSV row echoed back for correction, with the access code redacted: `api_key` is removed and replaced by `api_key_set` (`1` when the row supplied a non-empty code, else `0`), matching the redaction applied to every printer response.
 
+### `POST /api/printers/discover`
+
+Admin only. Scans the local network for Bambu printers. Discovery returns each device's identity and address only, never its access code (the access code is the LAN secret and cannot be discovered).
+
+**Body:**
+```json
+{ "method": "ssdp" }
+```
+or
+```json
+{ "method": "scan", "subnet": "192.168.1.0/24" }
+```
+
+- `method` (required): `"ssdp"` passively listens for LAN-mode announcement beacons on the same network segment; `"scan"` TCP-probes every host in `subnet` on the Bambu LAN service ports (8883 MQTT-TLS, 990 FTPS) and works across a routed VLAN where multicast does not reach.
+- `subnet` (required when `method` is `"scan"`): an IPv4 `/24`, written either as `192.168.1.0/24` or as the bare prefix `192.168.1`. Only `/24` is accepted, so a scan is bounded to 254 hosts.
+
+Both strategies are time-boxed (about 4 seconds) and never fail on a socket error: a run that finds nothing returns an empty list, not an error.
+
+**Response:**
+```json
+{
+  "method": "ssdp",
+  "count": 2,
+  "found": [
+    { "name": "Bambu X1C", "model": "C11", "serial": "00M09C1234567890", "ip": "192.168.1.42", "source": "ssdp", "already_known": false },
+    { "name": null, "model": null, "serial": null, "ip": "192.168.1.55", "source": "scan", "already_known": true }
+  ]
+}
+```
+
+`already_known` is `true` when the device matches an existing printer by serial (the stable identity) or, failing that, by IP. An SSDP record carries whatever identity fields the beacon announced (missing fields are `null`); a scan record is address-only (`name`, `model`, and `serial` are `null`) because a TCP probe cannot authenticate.
+
+Status codes: `200` (list returned, possibly empty), `400` (missing or invalid `method`, or a `scan` with a missing/unparseable `subnet`), `403` (not admin).
+
+### `POST /api/printers/discover/add`
+
+Admin only. Bulk-creates the selected discovered printers as **drafts**: each is inserted through the normal create path with `api_key = ''` and `is_active = 1`. No new column is added and `is_held` is left at its default; a draft is a normal printer row whose driver reports `OFFLINE` until an operator opens its detail page and enters the access code. The connector `type` is derived from the chosen model's connector, and a non-empty `group_name` is registered in the group registry just as `POST /api/printers` does.
+
+**Body:**
+```json
+{
+  "printers": [
+    { "name": "Bambu_192_168_1_42", "ip": "192.168.1.42", "model": "x1c", "serial_number": "00M09C1234567890", "group_name": "Rack A" }
+  ]
+}
+```
+
+Each row requires `name`, `ip`, and a `model` already registered in Printer Models. `serial_number` and `group_name` are optional. The whole batch is validated before any insert, so an unknown model rejects the request with `400` and creates nothing. Rows that duplicate an existing printer by name, serial, or IP are skipped rather than erroring the batch.
+
+**Response:**
+```json
+{
+  "added": 1,
+  "skipped": [
+    { "name": "Bambu_192_168_1_10", "ip": "192.168.1.10", "reason": "already registered" }
+  ]
+}
+```
+
+Status codes: `201` (drafts created; `added` may be `0` if every row was a duplicate), `400` (empty `printers` array, a row missing `name`/`ip`/`model`, or an unknown model), `403` (not admin).
+
 ---
 
 ## Groups

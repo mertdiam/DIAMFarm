@@ -2,6 +2,56 @@
 
 ---
 
+## 2026-07-12: Printer network discovery and draft bulk-add (TASK 7)
+
+SimplyPrint-style onboarding for Bambu printers: scan the LAN, review what was
+found, and add the selected devices in one action. Two strategies ship together
+because they cover different network layouts. SSDP passively listens for LAN-mode
+announcement beacons (same layer-2 segment); an IP-range scan TCP-probes every
+host in a /24 on the Bambu LAN service ports (works across a routed VLAN where
+multicast does not reach, which is the diamcore-box-reaches-printer-VLAN case).
+
+Discovered printers are added as drafts: the normal create path with
+`api_key = ''` and `is_active = 1`, no new column and `is_held` untouched. The
+Bambu driver returns OFFLINE without a code and the scheduler never dispatches to
+OFFLINE, so a draft is visible in the fleet as needs-setup with zero new state
+semantics and no hold-bypass. The operator opens the printer's detail page to
+enter the access code and bring it online. Discovery yields identity and address
+only and never obtains or guesses an access code (the LAN secret), so redaction
+holds trivially: a draft has no code to leak.
+
+Protocol note (CLAUDE.md non-negotiable 4): the Bambu LAN service ports used by
+the IP scan (8883 MQTT-TLS, 990 FTPS) are confirmed in OpenBambuAPI (mqtt.md,
+ftp.md). The SSDP announcement beacon is NOT documented in OpenBambuAPI, so the
+SSDP path is built defensively: the standard IANA/UPnP multicast group is used,
+the listen port is a named overridable constant flagged as needs-hardware-
+validation, and the beacon is parsed as generic SSDP with every identity field
+optional (the host IP comes from the datagram source, not a header). The SSDP
+path is implemented from standards plus defensive parsing and is NOT yet
+validated on real hardware; the IP-scan path uses only confirmed ports.
+
+### Changes
+- server/lib/discovery.js: new module. Time-boxed SSDP UDP listener (node dgram)
+  and IP-range TCP probe (node net), neither ever throws, returns deduped
+  { name, model, serial, ip, source } records. Zero new dependencies.
+- server/routes/printers.js: POST /api/printers/discover (ssdp or scan, per-row
+  already_known flag) and POST /api/printers/discover/add (transactional draft
+  bulk-add, reuses model validation and group auto-register, skips duplicates by
+  name/serial/ip). Static routes declared before the parameterized :id routes.
+- server/index.js: the two discover paths added to the ADMIN_ONLY gate table.
+- client/src/pages/Settings.jsx: Discover Printers panel near CSV Import (SSDP
+  button, subnet input plus range-scan button, results table with checkboxes and
+  per-row model/group pickers, Add Selected). After add, a toast points the
+  operator at each printer's detail page to enter its access code.
+- server/tests/discovery.test.js, server/tests/printers-discover.test.js: mocked
+  dgram/net for the module (fed a captured SSDP beacon), route tests for discover
+  (success/empty/dedup flag) and discover/add (drafts with empty api_key,
+  duplicate skip, model-validation 400, admin gate).
+- docs/api.md, docs/web-app.md, docs/installation.md: documented both endpoints,
+  the Settings panel, and the SSDP-same-L2 vs IP-scan-for-routed-VLAN guidance.
+
+---
+
 ## 2026-07-12: Ship operational scripts in the production image
 
 Seeding the first admin failed on the deployed Coolify container with

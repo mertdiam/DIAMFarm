@@ -4,6 +4,7 @@ const Papa = require('papaparse');
 const axios = require('axios');
 const router = express.Router();
 const events = require('../events');
+const discovery = require('../lib/discovery');
 const { sanitizePrinter, sanitizePrinters } = require('../lib/sanitize-printer');
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -147,6 +148,123 @@ module.exports = (db) => {
       }
       throw err;
     }
+  });
+
+  // ── Network discovery (TASK 7) ────────────────────────────────────────────────
+  // Static routes: declared before the parameterized ':id' routes so Express never
+  // treats "discover" as a printer id. Both are admin-gated in server/index.js.
+
+  // POST /api/printers/discover: scan the LAN for Bambu printers.
+  // Body: { method: 'ssdp' | 'scan', subnet? }. 'ssdp' passively listens for announcement
+  // beacons (same L2); 'scan' TCP-probes every host in the given /24 subnet (works across a
+  // routed VLAN). Returns the found devices, each with a per-row already_known flag
+  // cross-checked against existing printers by serial (stable identity) then IP.
+  // Response carries identity plus address only: discovery never yields an access code.
+  router.post('/discover', async (req, res) => {
+    const { method, subnet } = req.body || {};
+    if (method !== 'ssdp' && method !== 'scan') {
+      return res.status(400).json({ error: "method must be 'ssdp' or 'scan'" });
+    }
+
+    let records;
+    if (method === 'scan') {
+      if (!subnet || !discovery.parseSubnet(subnet)) {
+        return res.status(400).json({
+          error: 'subnet is required for a scan and must be an IPv4 /24 (e.g. 192.168.1.0/24 or 192.168.1)',
+        });
+      }
+      records = await discovery.discoverScan({ subnet });
+    } else {
+      records = await discovery.discoverSSDP();
+    }
+
+    // Cross-check against the current fleet (active and decommissioned) so the UI can flag
+    // devices already registered. Serial is the stable match; IP is the fallback.
+    const existing = db.prepare('SELECT serial_number, ip FROM printers').all();
+    const knownSerials = new Set(existing.map((p) => (p.serial_number || '').trim()).filter(Boolean));
+    const knownIps = new Set(existing.map((p) => (p.ip || '').trim()).filter(Boolean));
+
+    const found = records.map((r) => ({
+      name: r.name || null,
+      model: r.model || null,
+      serial: r.serial || null,
+      ip: r.ip || null,
+      source: r.source,
+      already_known: !!(
+        (r.serial && knownSerials.has(String(r.serial).trim())) ||
+        (r.ip && knownIps.has(String(r.ip).trim()))
+      ),
+    }));
+
+    res.json({ method, count: found.length, found });
+  });
+
+  // POST /api/printers/discover/add: bulk-create selected discovered printers as DRAFTS.
+  // Body: { printers: [{ name, ip, model, serial_number?, group_name? }, ...] }.
+  // A draft goes in through the normal create shape with api_key = '' and is_active = 1
+  // (no new column, is_held untouched): the Bambu driver returns OFFLINE without a code and
+  // the scheduler never dispatches to OFFLINE, so drafts sit in the fleet as needs-setup with
+  // zero new state semantics. The operator opens the detail page to enter the code later.
+  // Reuses the model-validation and group auto-register logic; transactional; duplicates
+  // (by name, serial, or IP) are skipped rather than erroring the whole batch.
+  router.post('/discover/add', (req, res) => {
+    const { printers } = req.body || {};
+    if (!Array.isArray(printers) || printers.length === 0) {
+      return res.status(400).json({ error: 'printers array is required' });
+    }
+
+    // Validate every row up front. A bad model is an operator config mistake, not a duplicate,
+    // so it fails the whole request with a clear 400 rather than being silently skipped.
+    const prepared = [];
+    for (const p of printers) {
+      const name = (p && p.name != null ? String(p.name) : '').trim();
+      const ip = (p && p.ip != null ? String(p.ip) : '').trim();
+      const model = normalizeModel(p && p.model);
+      const serial = (p && p.serial_number != null ? String(p.serial_number)
+        : (p && p.serial != null ? String(p.serial) : '')).trim();
+      const group_name = (p && p.group_name ? String(p.group_name).trim() : '') || null;
+
+      if (!name || !ip || !model) {
+        return res.status(400).json({ error: 'each printer requires name, ip, and model' });
+      }
+      const modelRow = db.prepare('SELECT connector FROM printer_models WHERE model_id = ?').get(model);
+      if (!modelRow) {
+        return res.status(400).json({
+          error: `Unknown model "${p.model}". Add it in Settings → Printer Models first.`,
+        });
+      }
+      // Derive the connector type from the chosen model (Bambu today, room for other brands).
+      prepared.push({ name, ip, model, serial, group_name, type: modelRow.connector });
+    }
+
+    const now = Date.now();
+    const insertStmt = db.prepare(`
+      INSERT INTO printers (name, ip, api_key, serial_number, group_name, type, model, is_active, created_at)
+      VALUES (?, ?, '', ?, ?, ?, ?, 1, ?)
+    `);
+    const existsByName = db.prepare('SELECT 1 FROM printers WHERE name = ?');
+    const existsBySerial = db.prepare("SELECT 1 FROM printers WHERE serial_number = ? AND serial_number != ''");
+    const existsByIp = db.prepare('SELECT 1 FROM printers WHERE ip = ?');
+
+    let added = 0;
+    const skipped = [];
+    db.transaction(() => {
+      for (const p of prepared) {
+        if (existsByName.get(p.name) || (p.serial && existsBySerial.get(p.serial)) || existsByIp.get(p.ip)) {
+          skipped.push({ name: p.name, ip: p.ip, reason: 'already registered' });
+          continue;
+        }
+        insertStmt.run(p.name, p.ip, p.serial, p.group_name, p.type, p.model, now);
+        // Best-effort convenience: a failure here must never turn an already-committed
+        // draft creation into a reported error.
+        if (p.group_name) {
+          try { registerGroup.run(p.group_name, now); } catch (_) {}
+        }
+        added += 1;
+      }
+    })();
+
+    res.status(201).json({ added, skipped });
   });
 
   // PUT /api/printers/:id — update printer
