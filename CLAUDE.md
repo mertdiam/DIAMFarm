@@ -172,6 +172,7 @@ This clone is DIAM's internal fork, named DIAMFarm (github.com/mertdiam/DIAMFarm
 - Branches: main tracks upstream, production is deployed, feature branches per task merged via small PRs.
 - Run npm test before every commit. Failing tests block commits.
 - Generic fixes (driver patches, header parser) get offered upstream as PRs once proven.
+- **NEVER change the licensing. Deal-breaker, no exceptions.** Do not edit, remove, relicense, or reword the LICENSE file; do not remove or alter upstream copyright notices or SPDX headers; do not add a conflicting license or change the project's license terms. The MIT license and upstream copyright stay intact verbatim, forever. UI content that is not a legal notice (donation buttons, branding) may be changed; the license text and copyright notices may not. If any task appears to require touching the license, STOP and ask Mert.
 - Append every significant decision to the Decisions Log below.
 
 ## Decisions Log
