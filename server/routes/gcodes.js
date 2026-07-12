@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { parseHeader } = require('../lib/headerParser');
 const router = express.Router();
 
 const GCODE_DIR = path.join(__dirname, '..', 'gcode');
@@ -90,6 +91,18 @@ function normalizeMaterialGrams(raw) {
   return null;
 }
 
+// header_meta is stored as JSON text; responses expose it as a parsed object (or
+// null). A row that predates the parser, or one whose stored text somehow is not
+// valid JSON, yields null rather than throwing on read.
+function hydrate(row) {
+  if (!row) return row;
+  let header_meta = null;
+  if (row.header_meta) {
+    try { header_meta = JSON.parse(row.header_meta); } catch (_) { header_meta = null; }
+  }
+  return { ...row, header_meta };
+}
+
 module.exports = (db) => {
   // GET /api/gcodes — list, optionally filtered by part_id
   router.get('/', (req, res) => {
@@ -97,7 +110,7 @@ module.exports = (db) => {
     const gcodes = part_id
       ? db.prepare('SELECT * FROM gcodes WHERE part_id = ?').all(part_id)
       : db.prepare('SELECT * FROM gcodes ORDER BY created_at DESC').all();
-    res.json(gcodes);
+    res.json(gcodes.map(hydrate));
   });
 
   // POST /api/gcodes/parse-filename — parse filename, return fields, don't save anything
@@ -155,9 +168,20 @@ module.exports = (db) => {
     const parsedRequiredMaterial = required_material && required_material !== '' ? required_material.trim() : null;
     const parsedRequiredColor    = required_color    && required_color    !== '' ? required_color.trim()    : null;
 
+    // Extract slicer metadata from the uploaded file for display and later dispatch
+    // matching. parseHeader never throws, but wrap it anyway: a parse failure must
+    // never fail the upload (spec section 1), it just leaves header_meta null.
+    let headerMeta = null;
+    try {
+      const meta = await parseHeader(req.file.path);
+      headerMeta = JSON.stringify(meta);
+    } catch (err) {
+      console.log('[gcodes] header parse failed for ' + req.file.filename + ': ' + err.message);
+    }
+
     const gcode = db.prepare(`
-      INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, material_grams, ams_slot, allowed_groups, required_material, required_color, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, material_grams, ams_slot, allowed_groups, required_material, required_color, header_meta, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       part_id,
       printer_model,
@@ -170,10 +194,11 @@ module.exports = (db) => {
       parsedAllowedGroups,
       parsedRequiredMaterial,
       parsedRequiredColor,
+      headerMeta,
       Date.now()
     );
 
-    res.status(201).json(db.prepare('SELECT * FROM gcodes WHERE id = ?').get(gcode.lastInsertRowid));
+    res.status(201).json(hydrate(db.prepare('SELECT * FROM gcodes WHERE id = ?').get(gcode.lastInsertRowid)));
   });
 
   // PUT /api/gcodes/:id — update est_print_secs and/or material_grams
@@ -214,7 +239,7 @@ module.exports = (db) => {
     db.prepare('UPDATE gcodes SET est_print_secs = ?, material_grams = ?, allowed_groups = ?, required_material = ?, required_color = ? WHERE id = ?')
       .run(estPrintSecs, materialGrams, allowedGroups, requiredMaterial, requiredColor, req.params.id);
 
-    res.json(db.prepare('SELECT * FROM gcodes WHERE id = ?').get(req.params.id));
+    res.json(hydrate(db.prepare('SELECT * FROM gcodes WHERE id = ?').get(req.params.id)));
   });
 
   // DELETE /api/gcodes/:id
