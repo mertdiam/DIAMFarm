@@ -199,11 +199,19 @@ Accepts an optional body:
 { "confirmed_qty": 24 }
 ```
 
-If `confirmed_qty` is provided and differs from the `parts_per_plate` of the printer's most recent finished job, the delta is applied to the part's `completed_qty` (e.g. operator confirms 24 of 25 good → `completed_qty` decremented by 1). If the auto-credit had closed the part, it is reopened. Omitting the body leaves `completed_qty` unchanged.
+**Precondition (409):** the printer must currently be awaiting operator sign-off (`is_held = 1`). If it is not held, the request returns `409 { "error": "Printer is not awaiting sign-off" }` and changes nothing. A printer that is not held has either already been resolved or never needed confirmation, so this rejects a stale Fleet tab or a duplicate submission before any `completed_qty` change.
 
-**OFFLINE-with-job exception:** if the printer's current status is `OFFLINE` and it has a `printing` job (no finished job), qty is not credited and the job is not marked finished. The printer is simply unheld and the job continues to its natural finish. This is the "Job OK" path from the Fleet UI — the operator is confirming the job is still running, not that it completed.
+**Idempotency:** all crediting plus the hold release run in a single transaction, so `is_held` is the single-use token for one sign-off. The first request credits and releases the hold; any duplicate (double-click, client retry) then arrives with `is_held = 0` and gets the 409 above. `completed_qty` therefore changes exactly once across any number of duplicate submissions.
 
-Returns the updated printer object.
+If `confirmed_qty` is provided and differs from the `parts_per_plate` of the printer's most recent finished job, the delta is applied to the part's `completed_qty` (for example an operator confirming 24 of 25 good decrements `completed_qty` by 1). If the auto-credit had closed the part, it is reopened. Omitting the body leaves `completed_qty` unchanged.
+
+**No-tracked-job release:** if the held printer has no tracked job (for example the scheduler held it because an untracked print finished on an uncleared bed; see docs/server.md), Set Ready credits nothing and simply releases the hold so the printer re-enters dispatch. This is the operator confirming the bed is clear.
+
+**OFFLINE-with-job exception:** if the printer's current status is `OFFLINE` and it has a `printing` job (no finished job), qty is not credited and the job is not marked finished. The printer is simply unheld and the job continues to its natural finish. This is the "Job OK" path from the Fleet UI: the operator is confirming the job is still running, not that it completed.
+
+**Session-failed fallback scope:** the fallback that credits a job marked `failed` during the current server process (the MQTT-reconnect recovery race) additionally requires that no newer job exists for the printer. A stale `failed` row with a later job dispatched after it is never credited by a subsequent Set Ready.
+
+Returns the updated printer object. Status codes: `200` (resolved), `404` (printer not found), `409` (printer not awaiting sign-off).
 
 ### `POST /api/printers/:id/decommission`
 

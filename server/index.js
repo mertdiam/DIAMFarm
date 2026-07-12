@@ -218,8 +218,27 @@ server = app.listen(PORT, () => {
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
 
+    // FIX (audit finding 4a): set-ready only resolves a printer that is awaiting operator
+    // sign-off. If is_held is already 0 the outcome was resolved by an earlier request, so a
+    // stale-UI or duplicate submission (double-click, client retry) must be rejected before
+    // touching completed_qty. This is also the idempotency guard (audit finding 5): the first
+    // request releases the hold inside the transaction below, so every duplicate lands here
+    // with is_held = 0 and never re-credits. completed_qty changes exactly once.
+    if (!printer.is_held) {
+      return res.status(409).json({ error: 'Printer is not awaiting sign-off' });
+    }
+
     const { confirmed_qty } = req.body || {};
     const now = Date.now();
+
+    // All crediting plus the hold release run in one transaction so completed_qty and the
+    // is_held release commit together. The hold is re-checked at the top of the transaction:
+    // the credit only applies while the printer is still the single-use token for this
+    // sign-off, so a duplicate that reached here (blocked by the 409 above, but defense in
+    // depth) finds is_held = 0 and returns without crediting.
+    const applyResolution = db.transaction(() => {
+    const held = db.prepare('SELECT is_held FROM printers WHERE id = ?').get(printer.id);
+    if (!held || !held.is_held) return;
 
     // Check for an uploading or printing job FIRST — they take priority over a stale
     // 'finished' job from a previous print cycle. Without this check, a printer that has
@@ -299,8 +318,11 @@ server = app.listen(PORT, () => {
       // the right job to credit when the operator confirms it was good.
       const activeJob = printingJob
         || db.prepare(`
-            SELECT * FROM jobs WHERE printer_id = ? AND status = 'failed' AND finished_at > ?
-            ORDER BY finished_at DESC LIMIT 1
+            SELECT * FROM jobs j WHERE j.printer_id = ? AND j.status = 'failed' AND j.finished_at > ?
+              AND NOT EXISTS (
+                SELECT 1 FROM jobs newer WHERE newer.printer_id = j.printer_id AND newer.id > j.id
+              )
+            ORDER BY j.finished_at DESC LIMIT 1
           `).get(printer.id, scheduler.startedAt)
         || db.prepare(`
             SELECT * FROM jobs WHERE printer_id = ? AND status = 'cancelled'
@@ -387,6 +409,9 @@ server = app.listen(PORT, () => {
     }
 
     db.prepare('UPDATE printers SET is_held = 0 WHERE id = ?').run(printer.id);
+    });
+    applyResolution();
+
     const updated = db.prepare('SELECT * FROM printers WHERE id = ?').get(printer.id);
     console.log(`[server] ${printer.name} set ready by operator — dispatching...`);
     scheduler.scheduleForPrinter(updated);

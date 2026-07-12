@@ -192,6 +192,21 @@ class JobScheduler extends EventEmitter {
       return null;
     }
 
+    // Guard against starting a new upload while one is already in flight for this printer.
+    // Prevents the 409-Conflict retry cycle where a slow transfer causes a retry that
+    // immediately hits the still-running first attempt.
+    //
+    // This MUST run before the stale-job auto-fail below. A live upload routinely outlasts
+    // STALE_JOB_GRACE_MS (the 60s UPLOAD_CONFLICT wait plus multi-minute large-file transfers),
+    // so a dispatch firing during the upload (e.g. the unguarded poller printerIdle path) would
+    // otherwise see an old 'uploading' job on an IDLE printer, mark the LIVE job 'failed', and
+    // hold the printer, setting up a phantom part credit via the set-ready session-failed
+    // fallback (audit finding 6). Consulting _activeUploads first keeps the in-flight job intact.
+    if (this._activeUploads.has(printer.id)) {
+      console.log(`[scheduler] ${printer.name} upload already in flight, skipping dispatch`);
+      return null;
+    }
+
     // Guard against double-dispatch: if this printer already has an active job
     // (uploading or printing) from a concurrent dispatch path, skip it.
     // This can happen when set-ready and the initial sweep fire simultaneously.
@@ -231,14 +246,6 @@ class JobScheduler extends EventEmitter {
       } else {
         console.log(`[scheduler] ${printer.name} already has an active job — skipping duplicate dispatch`);
       }
-      return null;
-    }
-
-    // Guard against starting a new upload while one is already in flight for this printer.
-    // Prevents the 409-Conflict retry cycle where a slow transfer causes a retry that
-    // immediately hits the still-running first attempt.
-    if (this._activeUploads.has(printer.id)) {
-      console.log(`[scheduler] ${printer.name} upload already in flight — skipping dispatch`);
       return null;
     }
 
@@ -461,9 +468,18 @@ class JobScheduler extends EventEmitter {
     }
 
     if (!job) {
-      console.warn(`[scheduler] FINISHED on ${printer.name} but no printing job found — may be outside system`);
-      // Still try to dispatch the next job
-      this._dispatchToPrinter(printer).catch(() => {});
+      // No tracked job: an untracked print (operator started a job on the printer directly,
+      // or a stale FINISHED latched from before this process) finished on an enrolled printer.
+      // Auto-dispatching here would upload the next job onto a bed that still holds the
+      // untracked plate (audit finding: untracked FINISHED auto-dispatch onto an uncleared bed).
+      // The design's answer to ambiguity is to ask the operator: hold the printer and notify.
+      // Set Ready (no tracked job = no credit) or recommission then releases it once the bed
+      // is confirmed clear. Crediting is untouched: this branch changes no completed_qty.
+      this.db.prepare('UPDATE printers SET is_held = 1 WHERE id = ?').run(printer.id);
+      notifications.add(
+        `${printer.name}: an untracked print finished. Clear the bed, then use Set Ready to release the printer.`
+      );
+      console.warn(`[scheduler] FINISHED on ${printer.name} but no tracked job found, printer held for operator to confirm the bed is clear`);
       return;
     }
 
