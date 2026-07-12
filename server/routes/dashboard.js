@@ -1,5 +1,6 @@
 const express = require('express');
 const router  = express.Router();
+const { sanitizePrinters } = require('../lib/sanitize-printer');
 
 // Completed job statuses — 'done' is a legacy alias retained for backward compat with older data.
 const DONE_STATUSES = "('finished', 'done')";
@@ -123,7 +124,9 @@ module.exports = (db) => {
         awaiting,
         parts_today: partsToday,
       },
-      printers,
+      // Stats above are derived from the raw rows; the client only ever receives the
+      // redacted list (no api_key, masked serial_number).
+      printers: sanitizePrinters(printers),
       active_projects: projectsWithParts,
       recent_activity: recentActivity,
     });

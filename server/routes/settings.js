@@ -4,11 +4,14 @@ const router = express.Router();
 const ALLOWED_KEYS = new Set(['dispatch_batch_size', 'farm_name']);
 
 module.exports = (db) => {
-  // GET /api/settings — returns all settings as { key: value, ... }
+  // GET /api/settings: returns the allowlisted settings as { key: value, ... }
+  // Filtered to ALLOWED_KEYS (the same set writes are constrained to) so that any secret
+  // ever stored in this table (auth secret, webhook token, SMTP password) does not
+  // round-trip to every client just because it lives in settings.
   router.get('/', (req, res) => {
     const rows = db.prepare('SELECT key, value FROM settings').all();
     const result = {};
-    rows.forEach(r => { result[r.key] = r.value; });
+    rows.forEach(r => { if (ALLOWED_KEYS.has(r.key)) result[r.key] = r.value; });
     res.json(result);
   });
 

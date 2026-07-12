@@ -97,7 +97,8 @@ Returns all active printers (`is_active = 1`) ordered by name.
     "id": 1,
     "name": "MK4S_01",
     "ip": "192.168.1.100",
-    "api_key": "aK3jR7xQ2pLm9vN",
+    "api_key_set": 1,
+    "serial_number": "****6789",
     "group_name": "MK4S Farm",
     "type": "prusa",
     "model": "mk4s",
@@ -111,6 +112,8 @@ Returns all active printers (`is_active = 1`) ordered by name.
   }
 ]
 ```
+
+**Credential redaction (applies to every endpoint that returns a printer object).** The stored access code (`api_key`: the Bambu LAN access code, PrusaLink API key, or OctoPrint API key) is never included in any response. It is replaced by `api_key_set`, which is `1` when a non-empty code is stored and `0` when it is not. `serial_number` is masked to its last four characters as `"****" + tail` (`null` stays `null`, `""` stays `""`). Writes still accept the real `api_key` and `serial_number`; see `POST`/`PUT` below.
 
 `job_name`, `job_progress`, and `job_time_remaining` are non-null only while `status = "PRINTING"`, and are cleared to `null` when the printer leaves that state.
 
@@ -168,6 +171,14 @@ Returns `201` with the created printer object. Returns `409` if `name` already e
 ### `PUT /api/printers/:id`
 
 Partial update — only fields provided are changed (uses `COALESCE`). All fields from POST are accepted, plus `is_held` (`0` or `1`).
+
+**Access-code write semantics.** Because the access code is never returned to the client, an edit form cannot round-trip it, so the write path treats it as write-only:
+
+- `api_key` present and non-empty: stores the new code.
+- `api_key` omitted or an empty string `""`: the stored code is left unchanged (an empty string does NOT wipe it).
+- `clear_api_key: true`: explicitly wipes the stored code (sets it to `""`). Use this to remove a code deliberately.
+
+A `serial_number` change is recorded in the printer's event timeline without the raw serial value (the note references the printer, not the digits). The response is redacted like every other printer object (`api_key_set`, masked `serial_number`).
 
 Returns `404` if not found, `409` on name conflict.
 
@@ -317,12 +328,14 @@ The `model` column is optional but strongly recommended. Valid values (case-inse
   "skipped": 1,
   "flagged": [
     {
-      "row": { "name": "Twilight", "ip": "192.168.1.102", "api_key": "...", "group": "Core One Farm", "type": "prusa" },
+      "row": { "name": "Twilight", "ip": "192.168.1.102", "api_key_set": 1, "group": "Core One Farm", "type": "prusa" },
       "reason": "Cannot infer model from name \"Twilight\". Please specify model manually."
     }
   ]
 }
 ```
+
+Each flagged `row` is the uploaded CSV row echoed back for correction, with the access code redacted: `api_key` is removed and replaced by `api_key_set` (`1` when the row supplied a non-empty code, else `0`), matching the redaction applied to every printer response.
 
 ---
 
@@ -581,7 +594,7 @@ Dismisses a notification. Returns `{ "ok": true }`. Returns `404` if not found.
 
 ### `GET /api/settings`
 
-Returns all operator settings as a flat object, e.g. `{ "dispatch_batch_size": "10", "farm_name": "My Farm" }`.
+Returns the operator settings as a flat object, e.g. `{ "dispatch_batch_size": "10", "farm_name": "My Farm" }`. The response is filtered to the same allowlist that constrains writes (`dispatch_batch_size`, `farm_name`), so any other key stored in the settings table (for example a future secret) is not returned.
 
 ### `PUT /api/settings/:key`
 
@@ -640,7 +653,7 @@ Single endpoint that returns all data required by the TV dashboard in one call. 
 - `awaiting` — printers held (`is_held = 1`) in `FINISHED` or `IDLE` state, waiting for operator sign-off
 - `parts_today` — sum of `parts_per_plate` on `finished` jobs in the rolling 24-hour window (`finished_at >= now - 86400000`)
 
-`printers` is the same shape as `GET /api/printers` (includes `last_parts_per_plate`) plus `last_event_at` — the timestamp of the most recent `printer_events` row for that printer.
+`printers` is the same shape as `GET /api/printers` (includes `last_parts_per_plate`, and is credential-redacted the same way: `api_key_set`, masked `serial_number`) plus `last_event_at`, the timestamp of the most recent `printer_events` row for that printer.
 
 `active_projects` includes only `status = 'active'` projects, each with a nested `parts` array ordered by `sort_order`, plus three computed stats fields:
 
@@ -672,7 +685,17 @@ All error responses use this shape:
 
 ### `GET /api/backup`
 
-Downloads a full farm snapshot as `farm-backup-YYYY-MM-DD.json`. Includes `printers`, `projects`, `parts`, `gcodes`, `jobs`, `printer_events`, `printer_models`, `filament_types`, `filament_colors`, `settings`, and gcode file contents (base64 encoded, keyed by on-disk filename). No request body.
+Downloads a full farm snapshot as `farm-backup-YYYY-MM-DD.json`. Includes `printers`, `projects`, `parts`, `gcodes`, `jobs`, `printer_events`, `printer_models`, `filament_types`, `filament_colors`, `settings`, and gcode file contents (base64 encoded, keyed by on-disk filename).
+
+**Printer access codes are excluded by default.** The `printers` rows in the bundle omit the `api_key` column so a routine backup is not a plaintext credential dump. `serial_number` stays in the bundle unmasked, because restore needs it and it is not a standalone secret.
+
+**Query parameter:**
+
+| Parameter | Effect |
+|---|---|
+| `include_credentials=true` | Includes the `api_key` column on each printer row, for a full disaster-recovery backup. Any other value, or omitting it, excludes credentials. |
+
+This endpoint is admin-gated. This is a breaking change for anyone scripting `GET /api/backup` and expecting access codes in the output: add `?include_credentials=true` to restore the old behavior.
 
 **Response:** `Content-Disposition: attachment` JSON file.
 
@@ -684,11 +707,14 @@ Each table's restore INSERT covers the columns the *live* schema currently has (
 
 `printer_models`, `filament_types`, `filament_colors`, and `settings` are restored the same way, but each is only cleared and rewritten if that key is present in the uploaded file — restoring a backup taken before these were added to the export leaves the farm's current printer models, filament library, and settings untouched rather than wiping them with nothing to restore.
 
+Restore accepts both backup shapes. When a printer row has no `api_key` (a default, credentials-excluded backup), the printer is restored with an empty access code (`""`) and counted in `printers_without_credentials`; those printers will not connect until an operator re-enters the code on the printer detail page. A backup taken with `?include_credentials=true` restores the codes as-is and reports `0`.
+
 **Request:** `multipart/form-data` with field `file` — the `.json` backup file. Max 500 MB.
 
 ```json
 {
   "ok": true,
+  "printers_without_credentials": 52,
   "printers": 52,
   "projects": 3,
   "parts": 12,

@@ -166,9 +166,11 @@ Click any row to navigate to `/printers/:id` (the Printer Detail view).
 
 Per-machine history and annotation screen. Reached by clicking a printer card in the Fleet page, clicking a row in the Printers page, or via the "View History" button in the Decommissioned page.
 
-**Header card:** printer name, live status badge (or DECOMMISSIONED), model, IP, connector type, decommissioned timestamp if applicable.
+**Header card:** printer name, live status badge (or DECOMMISSIONED), model, IP, connector type, an access-code indicator (`Access code: set / not set` from `api_key_set`, since the raw code is never sent to the client), the masked serial number if present, and the decommissioned timestamp if applicable.
 
 **Rename:** a **Rename** button next to the printer name swaps the header into an inline edit form. Save sends `PUT /api/printers/:id` with the new `name`; the server's UNIQUE-name 409 is surfaced inline. Escape or the Cancel button closes the form without saving.
+
+**Edit details:** an **Edit** button opens an inline form for IP, access code, serial, group, model, and loaded material/color. The access code field is a `type="password"` input that starts blank with an "unchanged" (or "not set") placeholder: it is write-only, so leaving it blank keeps the stored code and the masked value can never be written back over the real one. The serial field behaves the same way (blank keeps the stored value). A **Clear stored access code** action (shown only when a code is set) sends `clear_api_key: true` behind a `useConfirm` danger prompt to remove it deliberately.
 
 **Add note form:** freeform textarea → `POST /api/printers/:id/events`. Submitted note appears immediately at the top of the timeline.
 
@@ -210,13 +212,15 @@ Responsive grid of decommissioned printers — printers that have been pulled fr
 5. Clicking Save calls `POST /api/printers` with the operator-selected model
 6. Saved rows are removed from the flagged list and the imported count increments
 
+Flagged rows are echoed back with the access code redacted: the row carries `api_key_set` (presence only), never the raw code, so plaintext access codes are not returned in the import response.
+
 **Section order** (tuned for first-run flow): Server Alerts → Printer Models → Filament Library → Add Printer → CSV Import → Farm Name → Dispatch Settings → Farm Backup → Polling info. Models and Filaments come first because the Add Printer form depends on them.
 
-**Add Printer form:** shows a per-brand help box (`CREDENTIAL_HELP`) explaining where to find each brand's credentials (PrusaLink API key, Bambu LAN access code + serial, Elegoo/Klipper no key). If no models exist for the selected brand, an inline hint points at the Printer Models section.
+**Add Printer form:** shows a per-brand help box (`CREDENTIAL_HELP`) explaining where to find each brand's credentials (PrusaLink API key, Bambu LAN access code + serial, Elegoo/Klipper no key). The access code / API key field is a `type="password"` input so the credential is not shoulder-surfable on the shop floor or a wall-mounted display. If no models exist for the selected brand, an inline hint points at the Printer Models section.
 
 **Farm Name section:** saves the `farm_name` setting (`PUT /api/settings/farm_name`); `App.jsx` fetches it on load and shows it in the sidebar/topbar, falling back to "Print Farm".
 
-**Farm Backup section:** Export and Restore buttons — see [api.md](api.md) for the backup endpoints.
+**Farm Backup section:** Export and Restore buttons (see [api.md](api.md) for the backup endpoints). Export excludes printer access codes by default; an **Include printer access codes** checkbox (default unchecked) appends `?include_credentials=true` for a full disaster-recovery backup. After a restore, a warning is shown if any printers came back without an access code (a credentials-excluded backup), listing how many need their code re-entered.
 
 **Polling info section:** displays the 15-second interval and explains concurrent polling behavior.
 

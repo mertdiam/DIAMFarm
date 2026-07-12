@@ -4,6 +4,7 @@ const Papa = require('papaparse');
 const axios = require('axios');
 const router = express.Router();
 const events = require('../events');
+const { sanitizePrinter, sanitizePrinters } = require('../lib/sanitize-printer');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -61,7 +62,7 @@ module.exports = (db) => {
       WHERE p.is_active = 1
       ORDER BY p.name
     `).all();
-    res.json(printers);
+    res.json(sanitizePrinters(printers));
   });
 
   // GET /api/printers/groups — distinct non-null group names from active printers
@@ -91,7 +92,7 @@ module.exports = (db) => {
   // GET /api/printers/decommissioned — list decommissioned printers
   router.get('/decommissioned', (req, res) => {
     const printers = db.prepare('SELECT * FROM printers WHERE is_active = 0 ORDER BY decommissioned_at DESC').all();
-    res.json(printers);
+    res.json(sanitizePrinters(printers));
   });
 
   // GET /api/printers/ams?model=x1c — returns AMS slot list from any connected
@@ -115,7 +116,7 @@ module.exports = (db) => {
   router.get('/:id', (req, res) => {
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
-    res.json(printer);
+    res.json(sanitizePrinter(printer));
   });
 
   // POST /api/printers — add single printer
@@ -138,7 +139,7 @@ module.exports = (db) => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(name, ip, api_key || '', serial_number || '', group_name || null, printerType, normalized,
              loaded_material || null, loaded_color || null, Date.now());
-      res.status(201).json(db.prepare('SELECT * FROM printers WHERE id = ?').get(result.lastInsertRowid));
+      res.status(201).json(sanitizePrinter(db.prepare('SELECT * FROM printers WHERE id = ?').get(result.lastInsertRowid)));
     } catch (err) {
       if (err.message.includes('UNIQUE')) {
         return res.status(409).json({ error: `Printer name "${name}" already exists` });
@@ -152,7 +153,17 @@ module.exports = (db) => {
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
 
-    const { name, ip, api_key, serial_number, group_name, type, model, is_held, decommission_note, loaded_material, loaded_color } = req.body;
+    const { name, ip, api_key, serial_number, group_name, type, model, is_held, decommission_note, loaded_material, loaded_color, clear_api_key } = req.body;
+
+    // Credential write semantics (see docs/api.md):
+    //   clear_api_key: true  -> store '' (explicitly wipe the access code)
+    //   api_key non-empty    -> store the new value
+    //   api_key '' / omitted  -> keep the existing value untouched
+    // Treating an empty-string api_key as "keep" (rather than "wipe") lets the client edit
+    // form leave the password field blank to mean "unchanged" without ever round-tripping
+    // the real credential, which is never sent to the client in the first place.
+    const apiKeyBind = clear_api_key === true ? '' : (api_key ? api_key : null);
+
     let normalized = undefined;
     if (model !== undefined) {
       normalized = normalizeModel(model);
@@ -198,7 +209,7 @@ module.exports = (db) => {
             loaded_material = ?,
             loaded_color = ?
         WHERE id = ?
-      `).run(name, ip, api_key, serial_number, group_name, type, normalized, is_held, decommission_note ?? null,
+      `).run(name, ip, apiKeyBind, serial_number, group_name, type, normalized, is_held, decommission_note ?? null,
              newMaterial, newColor, req.params.id);
 
       // Log one event per changed field
@@ -206,12 +217,18 @@ module.exports = (db) => {
         const oldVal = printer[field] ?? null;
         const newVal = after[field]   ?? null;
         if (oldVal !== newVal) {
-          const fmt = v => (v == null ? '(none)' : v);
-          events.insert(printer.id, 'info_changed', `${label}: ${fmt(oldVal)} → ${fmt(newVal)}`);
+          if (field === 'serial_number') {
+            // Serial numbers are half of the Bambu LAN credential pair; never write the raw
+            // value into the permanent event timeline. Record only that it changed.
+            events.insert(printer.id, 'info_changed', `Serial number updated for ${printer.name}`);
+          } else {
+            const fmt = v => (v == null ? '(none)' : v);
+            events.insert(printer.id, 'info_changed', `${label}: ${fmt(oldVal)} → ${fmt(newVal)}`);
+          }
         }
       }
 
-      res.json(db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id));
+      res.json(sanitizePrinter(db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id)));
     } catch (err) {
       if (err.message.includes('UNIQUE')) {
         return res.status(409).json({ error: `Printer name "${name}" already exists` });
@@ -236,7 +253,7 @@ module.exports = (db) => {
     db.prepare('UPDATE printers SET is_active = 0, decommissioned_at = ? WHERE id = ?').run(now, printer.id);
     events.insert(printer.id, 'decommission', req.body?.note ?? null);
     console.log(`[printers] ${printer.name} decommissioned`);
-    res.json(db.prepare('SELECT * FROM printers WHERE id = ?').get(printer.id));
+    res.json(sanitizePrinter(db.prepare('SELECT * FROM printers WHERE id = ?').get(printer.id)));
   });
 
   // POST /api/printers/:id/complete-and-decommission — operator confirmed print was good; credit if
@@ -317,7 +334,7 @@ module.exports = (db) => {
     db.prepare('UPDATE printers SET is_active = 0, is_held = 0, decommissioned_at = ?, decommission_note = ? WHERE id = ?').run(now, decommNote, printer.id);
     events.insert(printer.id, 'decommission', decommNote ?? 'operator confirmed successful print — taken offline for maintenance');
     console.log(`[printers] ${printer.name} decommissioned after confirmed good print`);
-    res.json(db.prepare('SELECT * FROM printers WHERE id = ?').get(printer.id));
+    res.json(sanitizePrinter(db.prepare('SELECT * FROM printers WHERE id = ?').get(printer.id)));
   });
 
   // POST /api/printers/:id/recommission — handled in server/index.js (needs scheduler access)
@@ -451,6 +468,15 @@ module.exports = (db) => {
     const rows = parsed.data;
     const summary = { imported: 0, skipped: 0, flagged: [] };
 
+    // Flagged rows are echoed back so the operator can fix them, but the raw CSV row carries
+    // the access code. Strip api_key from the echo and report only its presence (api_key_set),
+    // matching how printer rows are redacted everywhere else. The value may otherwise be
+    // logged by proxies or persisted by the UI.
+    const redactCsvRow = (row) => {
+      const { api_key, ...rest } = row;
+      return { ...rest, api_key_set: (api_key && String(api_key).trim()) ? 1 : 0 };
+    };
+
     const insertStmt = db.prepare(`
       INSERT INTO printers (name, ip, api_key, serial_number, group_name, type, model, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -467,7 +493,7 @@ module.exports = (db) => {
 
       const rowRequiresApiKey = !NO_API_KEY_TYPES.has(type);
       if (!name || !ip || (rowRequiresApiKey && !api_key)) {
-        summary.flagged.push({ row, reason: 'Missing required field (name, ip, or api_key)' });
+        summary.flagged.push({ row: redactCsvRow(row), reason: 'Missing required field (name, ip, or api_key)' });
         continue;
       }
 
@@ -479,14 +505,14 @@ module.exports = (db) => {
       const model = resolveModel(row.model, name);
       if (!model) {
         summary.flagged.push({
-          row,
+          row: redactCsvRow(row),
           reason: `Could not determine model for "${name}". Add a "model" column or use a recognized name prefix.`,
         });
         continue;
       }
       if (!db.prepare('SELECT 1 FROM printer_models WHERE model_id = ?').get(model)) {
         summary.flagged.push({
-          row,
+          row: redactCsvRow(row),
           reason: `Model "${model}" is not registered. Add it in Settings → Printer Models first.`,
         });
         continue;
@@ -496,7 +522,7 @@ module.exports = (db) => {
         insertStmt.run(name, ip, api_key, serial_number, group_name, type, model, Date.now());
         summary.imported++;
       } catch (err) {
-        summary.flagged.push({ row, reason: err.message });
+        summary.flagged.push({ row: redactCsvRow(row), reason: err.message });
       }
     }
 
@@ -550,7 +576,7 @@ module.exports = (db) => {
     db.prepare('UPDATE printers SET is_held = 0 WHERE id = ?').run(printer.id);
 
     console.log(`[printers] Job ${job.id} manually linked to ${printer.name} by operator`);
-    res.json(db.prepare('SELECT * FROM printers WHERE id = ?').get(printer.id));
+    res.json(sanitizePrinter(db.prepare('SELECT * FROM printers WHERE id = ?').get(printer.id)));
   });
 
   // Mount events sub-router — GET/POST /api/printers/:id/events

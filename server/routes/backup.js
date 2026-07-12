@@ -62,8 +62,18 @@ function makeInserter(db, table, rows) {
 
 module.exports = (db) => {
   // GET /api/backup — export full farm as a downloadable JSON bundle
+  //
+  // Printer access codes (api_key) are EXCLUDED by default so a routine backup is not a
+  // plaintext credential dump that gets stored or shared. Pass ?include_credentials=true
+  // for a full disaster-recovery backup that keeps the access codes (this endpoint is
+  // admin-gated in server/index.js). serial_number stays in the bundle unmasked either
+  // way: restore needs it, and it is not a standalone secret.
   router.get('/', (req, res) => {
-    const printers        = db.prepare('SELECT * FROM printers').all();
+    const includeCredentials = req.query.include_credentials === 'true';
+    const printerRows     = db.prepare('SELECT * FROM printers').all();
+    const printers        = includeCredentials
+      ? printerRows
+      : printerRows.map(({ api_key, ...rest }) => rest);
     const projects        = db.prepare('SELECT * FROM projects').all();
     const parts           = db.prepare('SELECT * FROM parts').all();
     const gcodes          = db.prepare('SELECT * FROM gcodes').all();
@@ -140,6 +150,19 @@ module.exports = (db) => {
       // Older backups (pre-dating printer_models/filament/settings export) won't have these
       // keys at all — guard each so restoring one doesn't wipe current config with nothing
       // to restore it from. New backups always include all of them together.
+      // A backup exported without credentials (the default) has no api_key on its printer
+      // rows. printers.api_key is NOT NULL with no default, so restore must supply '' for
+      // those rows, otherwise makeInserter would omit the column and the INSERT would fail.
+      // Count them so the response can warn that these printers restored without an access
+      // code and will not connect until the operator re-enters it.
+      let printersWithoutCredentials = 0;
+      for (const p of (backup.printers || [])) {
+        if (p.api_key === undefined) {
+          p.api_key = '';
+          printersWithoutCredentials++;
+        }
+      }
+
       const hasPrinterModels  = Array.isArray(backup.printer_models);
       const hasFilamentTypes  = Array.isArray(backup.filament_types);
       const hasFilamentColors = Array.isArray(backup.filament_colors);
@@ -210,6 +233,7 @@ module.exports = (db) => {
 
       res.json({
         ok: true,
+        printers_without_credentials: printersWithoutCredentials,
         printers:        (backup.printers        || []).length,
         projects:        (backup.projects        || []).length,
         parts:           (backup.parts           || []).length,

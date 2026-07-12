@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useToast } from '../useToast';
+import { useConfirm } from '../useConfirm';
 
 function formatTimestamp(ms) {
   if (!ms) return '—';
@@ -74,6 +76,8 @@ const detailInputStyle = {
 export default function PrinterDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [showToast, toastEl] = useToast();
+  const [confirm, confirmModal] = useConfirm();
 
   const [printer, setPrinter]   = useState(null);
   const [events, setEvents]     = useState([]);
@@ -180,10 +184,13 @@ export default function PrinterDetail() {
   const NO_API_KEY_TYPES = new Set(['elegoo-centauri', 'klipper']);
 
   function startEditDetails() {
+    // Credentials are never sent to the client, so the access code and serial fields start
+    // blank and are write-only: a blank field means "leave unchanged" on save. This is what
+    // stops a masked value from being written back over the real stored credential.
     setDetailsDraft({
       ip: printer.ip || '',
-      api_key: printer.api_key || '',
-      serial_number: printer.serial_number || '',
+      api_key: '',
+      serial_number: '',
       group_name: printer.group_name || '',
       model: printer.model || '',
       loaded_material: printer.loaded_material || '',
@@ -191,6 +198,32 @@ export default function PrinterDetail() {
     });
     setDetailsError(null);
     setEditingDetails(true);
+  }
+
+  async function clearAccessCode() {
+    const ok = await confirm({
+      title: 'Clear stored access code',
+      message: 'This removes the stored access code for this printer. It will not connect until a new code is entered.',
+      confirmLabel: 'Clear access code',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/printers/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clear_api_key: true }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        showToast('Clear access code failed: ' + (body.error || res.status), 'error');
+        return;
+      }
+      setPrinter(await res.json());
+      showToast('Access code cleared');
+    } catch {
+      showToast('Clear access code failed', 'error');
+    }
   }
 
   function cancelEditDetails() {
@@ -205,18 +238,25 @@ export default function PrinterDetail() {
     setSavingDetails(true);
     setDetailsError(null);
     try {
+      // Access code and serial are write-only: send them only when the operator typed a new
+      // value, so a blank field leaves the stored value untouched (the server also treats an
+      // empty-string api_key as "keep"). serial_number is sent as null when blank so the
+      // COALESCE update keeps the existing value rather than wiping it.
+      const body = {
+        ip,
+        group_name: detailsDraft.group_name.trim() || null,
+        model: detailsDraft.model,
+        serial_number: detailsDraft.serial_number.trim() || null,
+        loaded_material: detailsDraft.loaded_material.trim() || null,
+        loaded_color: detailsDraft.loaded_color.trim() || null,
+      };
+      const newKey = detailsDraft.api_key.trim();
+      if (newKey) body.api_key = newKey;
+
       const res = await fetch(`/api/printers/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ip,
-          api_key: detailsDraft.api_key.trim(),
-          serial_number: detailsDraft.serial_number.trim(),
-          group_name: detailsDraft.group_name.trim() || null,
-          model: detailsDraft.model,
-          loaded_material: detailsDraft.loaded_material.trim() || null,
-          loaded_color: detailsDraft.loaded_color.trim() || null,
-        }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -237,6 +277,8 @@ export default function PrinterDetail() {
 
   return (
     <div style={{ maxWidth: 720 }}>
+      {toastEl}
+      {confirmModal}
       {/* Back link */}
       <button
         onClick={() => navigate('/printers')}
@@ -351,13 +393,33 @@ export default function PrinterDetail() {
               </label>
               {!NO_API_KEY_TYPES.has(printer.type) && (
                 <label style={detailLabelStyle}>
-                  API Key
+                  {printer.type === 'bambu' || printer.type === 'elegoo-centauri2' ? 'Access Code' : 'API Key'}
                   <input
+                    type="password"
+                    autoComplete="off"
                     value={detailsDraft.api_key}
                     onChange={e => setDetailsDraft(d => ({ ...d, api_key: e.target.value }))}
                     disabled={savingDetails}
+                    placeholder={printer.api_key_set ? 'unchanged' : 'not set'}
                     style={detailInputStyle}
                   />
+                  {printer.api_key_set ? (
+                    <button
+                      type="button"
+                      onClick={clearAccessCode}
+                      disabled={savingDetails}
+                      style={{
+                        marginTop: 4, alignSelf: 'flex-start',
+                        background: 'none', border: '1px solid #7f1d1d',
+                        color: '#fca5a5', borderRadius: 5,
+                        padding: '2px 8px', fontSize: 10, fontWeight: 600,
+                        cursor: savingDetails ? 'not-allowed' : 'pointer', letterSpacing: '0.04em',
+                        textTransform: 'none',
+                      }}
+                    >
+                      Clear stored access code
+                    </button>
+                  ) : null}
                 </label>
               )}
               <label style={detailLabelStyle}>
@@ -376,7 +438,7 @@ export default function PrinterDetail() {
                   value={detailsDraft.serial_number}
                   onChange={e => setDetailsDraft(d => ({ ...d, serial_number: e.target.value }))}
                   disabled={savingDetails}
-                  placeholder="optional"
+                  placeholder={printer.serial_number ? `${printer.serial_number} (unchanged)` : 'optional'}
                   style={detailInputStyle}
                 />
               </label>
@@ -461,6 +523,17 @@ export default function PrinterDetail() {
             )}
             {printer.type && printer.type !== 'prusa' && (
               <span>Connector: <span style={{ color: '#94a3b8' }}>{printer.type}</span></span>
+            )}
+            {!NO_API_KEY_TYPES.has(printer.type) && (
+              <span>
+                {printer.type === 'bambu' || printer.type === 'elegoo-centauri2' ? 'Access code' : 'API key'}:{' '}
+                <span style={{ color: printer.api_key_set ? '#86efac' : '#fca5a5' }}>
+                  {printer.api_key_set ? 'set' : 'not set'}
+                </span>
+              </span>
+            )}
+            {printer.serial_number && (
+              <span>Serial: <span style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{printer.serial_number}</span></span>
             )}
             {(printer.loaded_material || printer.loaded_color) && (
               <span>
