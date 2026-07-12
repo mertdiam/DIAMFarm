@@ -300,9 +300,13 @@ export default function Settings() {
   const [restoreError, setRestoreError] = useState(null);
   const restoreFileRef = useRef(null);
 
+  const [includeCredentials, setIncludeCredentials] = useState(false);
+
   const handleExport = useCallback(() => {
-    window.location.href = '/api/backup';
-  }, []);
+    // Access codes are excluded by default; the checkbox appends the flag for a full
+    // disaster-recovery backup that carries them (see docs/api.md GET /api/backup).
+    window.location.href = includeCredentials ? '/api/backup?include_credentials=true' : '/api/backup';
+  }, [includeCredentials]);
 
   async function handleRestore(e) {
     e.preventDefault();
@@ -800,6 +804,8 @@ export default function Settings() {
                   {addForm.type === 'bambu' || addForm.type === 'elegoo-centauri2' ? 'Access Code *' : 'API Key *'}
                 </label>
                 <input
+                  type="password"
+                  autoComplete="off"
                   value={addForm.api_key}
                   onChange={e => setAddForm(p => ({ ...p, api_key: e.target.value }))}
                   required
@@ -1062,25 +1068,37 @@ export default function Settings() {
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
           Export a full snapshot of your printers, projects, parts, G-code files, and job history.
           Use the same file to restore on another machine or recover from data loss.
+          Printer access codes are left out by default; tick the box below to include them in a
+          full disaster-recovery backup.
         </p>
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           {/* Export */}
-          <button
-            onClick={handleExport}
-            style={{
-              background: '#0f3460',
-              color: '#93c5fd',
-              border: '1px solid #1e40af',
-              borderRadius: 6,
-              padding: '8px 18px',
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            Export Farm
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <button
+              onClick={handleExport}
+              style={{
+                background: '#0f3460',
+                color: '#93c5fd',
+                border: '1px solid #1e40af',
+                borderRadius: 6,
+                padding: '8px 18px',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Export Farm
+            </button>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#64748b', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={includeCredentials}
+                onChange={e => setIncludeCredentials(e.target.checked)}
+              />
+              Include printer access codes
+            </label>
+          </div>
 
           {/* Restore */}
           <form onSubmit={handleRestore} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1140,6 +1158,11 @@ export default function Settings() {
               <Chip color="#4ade80" label={`${restoreResult.filament_types ?? 0} filament types`} />
               <Chip color="#4ade80" label={`${restoreResult.filament_colors ?? 0} filament colors`} />
             </div>
+            {restoreResult.printers_without_credentials > 0 && (
+              <div style={{ marginTop: 10, background: '#78350f', borderRadius: 6, padding: '10px 14px', color: '#fcd34d', fontSize: 13 }}>
+                {restoreResult.printers_without_credentials} printer(s) restored without an access code (the backup did not include credentials). Re-enter each printer's access code on its detail page before it can connect.
+              </div>
+            )}
           </div>
         )}
       </section>
