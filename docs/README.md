@@ -37,11 +37,13 @@ Prefer Docker over a local Node.js install? `docker compose up --build print-far
 print-farm-manager/
 ├── server/
 │   ├── index.js          # Express entry point
-│   ├── db.js             # SQLite connection + schema init + startup migrations
+│   ├── db.js             # SQLite connection + schema init + startup migrations (incl. auth tables)
+│   ├── auth.mjs          # Better Auth instance (ESM): email/password, admin/operator roles
 │   ├── poller.js         # Printer polling loop (EventEmitter)
 │   ├── scheduler.js      # Job dispatch engine (EventEmitter)
 │   ├── events.js         # Printer event log helper — insert(printerId, type, note)
 │   ├── notifications.js  # In-memory operator alert store
+│   ├── middleware/       # require-auth (session -> 401) + require-role (role -> 403)
 │   └── routes/
 │       ├── printers.js   # CRUD + CSV import + decommission/recommission
 │       ├── events.js     # GET/POST /api/printers/:id/events
@@ -57,7 +59,10 @@ print-farm-manager/
 │   ├── src/
 │   │   ├── App.jsx       # Layout + router
 │   │   ├── main.jsx      # React root
+│   │   ├── lib/authClient.js     # Better Auth React client (same-origin, admin plugin)
 │   │   └── pages/
+│   │       ├── Login.jsx         # Email/password login (shown when unauthenticated)
+│   │       ├── Users.jsx         # Admin-only user management
 │   │       ├── Fleet.jsx          # Live printer grid
 │   │       ├── Printers.jsx       # All-printers directory
 │   │       ├── PrinterDetail.jsx  # Per-printer event timeline + notes

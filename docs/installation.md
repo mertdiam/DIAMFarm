@@ -166,6 +166,36 @@ This only needs to be re-run after an update — see [Updating](#updating).
 
 ---
 
+## Authentication Setup
+
+The app requires a login. Set these environment variables before starting the server (in the machine's environment, or the PM2 ecosystem file, or a `.env`-style loader of your choice):
+
+| Variable | Required | Description |
+|---|---|---|
+| `BETTER_AUTH_SECRET` | Yes | Signing secret for sessions. Generate one with `npx auth@1.6.23 secret` and keep it stable (changing it logs everyone out). |
+
+Note: `BETTER_AUTH_SECRET` is required even for `DEMO_MODE=true` development runs (the server fails fast without it), and the demo database still needs one seeded admin to log in with.
+| `BETTER_AUTH_URL` | Recommended | The base URL operators use, e.g. `http://192.168.1.50:3000`. Defaults to `http://localhost:3000`. |
+| `BETTER_AUTH_TRUSTED_ORIGINS` | Recommended | Comma-separated list of every origin operators open the app from (LAN IP, mDNS name). Logins from an origin not listed here are rejected. Wildcards like `http://192.168.1.*:3000` are supported. Defaults to `BETTER_AUTH_URL`. |
+
+### Create the first admin
+
+Public sign-up is disabled, so the first account is created once with the seed script. Provide the credentials through the environment (they are never stored in the repo):
+
+```
+SEED_ADMIN_EMAIL=admin@example.com \
+SEED_ADMIN_PASSWORD='choose-a-strong-password' \
+SEED_ADMIN_NAME='Farm Admin' \
+BETTER_AUTH_SECRET=your-secret \
+npm run seed-admin
+```
+
+The script refuses to run if that email already exists, so it is safe to re-run. After it succeeds, log in at the app URL as that admin, then create operator and additional admin accounts from the **Users** page (visible to admins only). Operators can run production; only admins manage printers, settings, backups, and users.
+
+> Cookies are non-secure by design because the farm runs over plain HTTP on the LAN. Do not expose the app directly to the internet; if you must, put it behind an HTTPS reverse proxy and set `BETTER_AUTH_URL` to the HTTPS address.
+
+---
+
 ## Network Setup
 
 The machine running Print Farm Manager must be on the **same local network** as your printers. All communication happens over HTTP directly to each printer's IP address — no internet connection is required.

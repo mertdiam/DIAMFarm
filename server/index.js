@@ -34,24 +34,79 @@ const printerJobsRouter  = require('./routes/printer-jobs')(db);
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+// Assigned inside the async bootstrap once app.listen resolves; exposed via the module
+// getter below so `require`-time export does not touch it before the IIFE runs.
+let server;
 
-// API routes
-app.use('/api/printers',        printersRouter);
-app.use('/api/printers/:id/jobs', printerJobsRouter);
-app.use('/api/parts',           partsRouter);
-app.use('/api/gcodes',          gcodesRouter);
-app.use('/api/jobs',            jobsRouter);
-app.use('/api/backup',          backupRouter);
-app.use('/api/dashboard',       dashboardRouter);
-app.use('/api/settings',        settingsRouter);
-app.use('/api/models',          modelsRouter);
-app.use('/api/filaments',       filamentsRouter);
+// Better Auth is ESM-only; load it and wire the whole request pipeline inside an async
+// bootstrap. Everything below (body parser, auth guard, routers, server.listen) lives in
+// here because it all depends on the auth instance resolved by the dynamic import.
+(async () => {
+  const { auth } = await import('./auth.mjs');
+  const { toNodeHandler, fromNodeHeaders } = await import('better-auth/node');
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: Date.now() });
-});
+  const requireAuth = require('./middleware/require-auth')(auth, { fromNodeHeaders });
+  const requireRole = require('./middleware/require-role');
+
+  // The auth handler MUST mount before express.json(): the JSON body parser would consume
+  // the request stream the auth handler needs, leaving sign-in stuck pending. Express 4
+  // wildcard path syntax.
+  app.all('/api/auth/*', toNodeHandler(auth));
+
+  app.use(express.json());
+
+  // Health check stays public (used by Docker and monitoring before a login exists).
+  app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: Date.now() });
+  });
+
+  // Every other /api/* request requires an authenticated session. /api/auth/* is already
+  // handled above and terminates before reaching here; it is skipped defensively regardless.
+  app.use('/api', (req, res, next) => {
+    if (req.path === '/health' || req.path === '/auth' || req.path.startsWith('/auth/')) {
+      return next();
+    }
+    return requireAuth(req, res, next);
+  });
+
+  // Admin-only endpoints (an authenticated operator gets everything else). One explicit
+  // table here keeps the route files untouched. Registered before the routers and before
+  // the inline scheduler endpoints in server.listen so the gate always runs first. Role
+  // split per PLAN.md section 4: printer fleet lifecycle plus infrastructure config (models,
+  // filaments, settings) plus backup are admin; read plus operator production actions
+  // (upload, queue, set-ready, recommission-to-service is admin lifecycle) follow below.
+  const adminGate = requireRole('admin');
+  const ADMIN_ONLY = [
+    ['post',   '/api/printers'],
+    ['put',    '/api/printers/:id'],
+    ['delete', '/api/printers/:id'],
+    ['post',   '/api/printers/import'],
+    ['post',   '/api/printers/:id/decommission'],
+    ['post',   '/api/printers/:id/complete-and-decommission'],
+    ['post',   '/api/printers/:id/recommission'],
+    ['post',   '/api/models'],
+    ['delete', '/api/models/:model_id'],
+    ['post',   '/api/filaments/types'],
+    ['delete', '/api/filaments/types/:id'],
+    ['post',   '/api/filaments/colors'],
+    ['delete', '/api/filaments/colors/:id'],
+    ['put',    '/api/settings/:key'],
+    ['get',    '/api/backup'],
+    ['post',   '/api/backup/restore'],
+  ];
+  for (const [method, routePath] of ADMIN_ONLY) app[method](routePath, adminGate);
+
+  // API routes
+  app.use('/api/printers',        printersRouter);
+  app.use('/api/printers/:id/jobs', printerJobsRouter);
+  app.use('/api/parts',           partsRouter);
+  app.use('/api/gcodes',          gcodesRouter);
+  app.use('/api/jobs',            jobsRouter);
+  app.use('/api/backup',          backupRouter);
+  app.use('/api/dashboard',       dashboardRouter);
+  app.use('/api/settings',        settingsRouter);
+  app.use('/api/models',          modelsRouter);
+  app.use('/api/filaments',       filamentsRouter);
 
 // Server notifications — surfaced in the Settings UI
 app.get('/api/notifications', (_req, res) => res.json(notifications.list()));
@@ -82,7 +137,7 @@ app.get(/^(?!\/api).*/, (_req, res) => {
 });
 
 // Start server
-const server = app.listen(PORT, () => {
+server = app.listen(PORT, () => {
   console.log(`[server] Express running on http://localhost:${PORT}`);
 
   const poller    = new PrinterPoller(db);
@@ -336,6 +391,7 @@ const server = app.listen(PORT, () => {
     scheduler.scheduleForPrinter(updated);
     res.json(updated);
   });
-});
+  });
+})();
 
-module.exports = { app, server };
+module.exports = { app, get server() { return server; } };

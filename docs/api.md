@@ -18,6 +18,73 @@ All request bodies are JSON (`Content-Type: application/json`) unless noted othe
 
 ---
 
+## Authentication
+
+Authentication is provided by Better Auth (pinned to 1.6.23) and mounted at `/api/auth/*`. Login is email and password with session cookies. Public sign-up is disabled: accounts are created by an admin, never self-service.
+
+### Protected routes
+
+Every `/api/*` route requires an authenticated session EXCEPT `/api/auth/*` (the auth handler itself) and `/api/health`. The session cookie is sent automatically by the browser on same-origin requests, so the existing client `fetch('/api/...')` calls need no change.
+
+Sessions use a 5 minute cookie cache (`session.cookieCache`, maxAge 300): a role change, ban, or session revocation can take up to 5 minutes to bite on requests that ride the cached cookie. For a 10 person LAN this trade was accepted for one fewer DB read per request; revoke-and-wait applies when it matters.
+
+- No or invalid session: `401 { "error": "Authentication required" }`
+- Authenticated but missing the required role on an admin-only route: `403 { "error": "Forbidden: requires admin role" }`
+
+### Roles
+
+Two roles. New accounts default to `operator`.
+
+| Role | May do |
+|---|---|
+| `operator` | Read every resource; run production actions: gcode upload, part and project edits and reorder, job cancel, set-ready, batch set-ready, dispatch. |
+| `admin` | Everything an operator can, plus printer fleet lifecycle (create, update, delete, import, decommission, complete-and-decommission, recommission), infrastructure config (printer models, filament library, settings), backup export and restore, and user management. |
+
+Admin-only endpoints (all others require only an authenticated session):
+
+```
+POST   /api/printers
+PUT    /api/printers/:id
+DELETE /api/printers/:id
+POST   /api/printers/import
+POST   /api/printers/:id/decommission
+POST   /api/printers/:id/complete-and-decommission
+POST   /api/printers/:id/recommission
+POST   /api/models
+DELETE /api/models/:model_id
+POST   /api/filaments/types
+DELETE /api/filaments/types/:id
+POST   /api/filaments/colors
+DELETE /api/filaments/colors/:id
+PUT    /api/settings/:key
+GET    /api/backup
+POST   /api/backup/restore
+```
+
+### Auth endpoints (Better Auth)
+
+Handled by Better Auth under `/api/auth/*`. The common ones:
+
+- `POST /api/auth/sign-in/email` with `{ "email", "password", "rememberMe" }`. On success sets the session cookie. On bad credentials returns `401 { "code": "INVALID_EMAIL_OR_PASSWORD" }`.
+- `POST /api/auth/sign-out` clears the session.
+- `GET /api/auth/get-session` returns `{ session, user } | null`.
+- The admin plugin adds `/api/auth/admin/*` (list users, create user, set role, ban, unban, remove). These enforce the admin role themselves. The React client wraps them as `authClient.admin.*`.
+- `POST /api/auth/sign-up/email` is rejected because public sign-up is disabled.
+
+State-changing POSTs require an `Origin` header that matches a trusted origin (browsers send this automatically). See the env vars below.
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `BETTER_AUTH_SECRET` | (none) | Signing secret. Required always: the server refuses to start without it. Generate with `npx auth@1.6.23 secret`. |
+| `BETTER_AUTH_URL` | `http://localhost:3000` | Base URL of the deployment. |
+| `BETTER_AUTH_TRUSTED_ORIGINS` | the base URL | Comma-separated list of origins allowed to POST. Add every LAN origin (IP and mDNS name) operators reach the app from, or their logins fail CSRF. Wildcards like `http://192.168.1.*:3000` are supported. |
+
+Cookies are non-secure by design (the farm runs over plain HTTP on a LAN). See docs/installation.md for the first-admin seed step.
+
+---
+
 ## Printers
 
 ### `GET /api/printers`
