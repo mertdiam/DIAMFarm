@@ -1226,6 +1226,11 @@ export default function Settings() {
           printer's identity and address only, never its access code: after adding, open each
           printer's detail page to enter its access code and bring it online.
         </p>
+        <p style={{ color: '#fbbf24', fontSize: 12, marginBottom: 16 }}>
+          Note: the SSDP beacon format is not documented by Bambu, so passive scan is implemented
+          from standards and not yet validated on real hardware. If SSDP finds nothing, use the
+          range scan, which probes the confirmed Bambu LAN ports.
+        </p>
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
           <button
