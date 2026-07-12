@@ -206,3 +206,20 @@ When Phase 2 starts, expand these into full file-scoped briefs using T2-T4 above
 4. One brief per session, one feature per PR, worktrees for parallelism.
 5. Keep `CLAUDE.md` Decisions Log current - it's the cheapest token saver you have.
 6. Node 22 LTS, SQLite stays, no TS conversion of existing files, MIT `LICENSE` preserved, verify external docs links before trusting them.
+
+---
+
+### TASK 6 - Audit Criticals Fix Pack (pre-launch, gated on Mert sign-off)
+
+**Tier:** Opus implements, adversarial review + Mert approval BEFORE merge. This brief touches part-count integrity paths, so per CLAUDE.md escalation rule 1 the analysis below must be approved by Mert before any code lands.
+**Phase:** 1 (pre-launch). **Depends on:** PRs 1-4 merged (done). **Source:** docs/internal/audit-findings.md confirmed findings.
+
+**Scope (the four non-driver actionables from the audit GO conditions):**
+1. set-ready phantom credit (server/index.js:249 area): add an is_held precondition and gate the cancelled-job fallback on a still-active job. Unique real-world event backing a credit: operator Set Ready against a job whose print physically completed on this printer since scheduler start.
+2. set-ready non-idempotent confirmed_qty adjustment (server/index.js:208 area): make duplicate submissions safe (idempotency check against job state before applying the delta).
+3. Stale-job auto-fail racing live uploads (server/scheduler.js:221 area): consult _activeUploads before the stale-job auto-fail. This brief explicitly names scheduler.js for this ordering change only.
+4. Untracked FINISHED auto-dispatch onto uncleared bed (server/scheduler.js:463 area): hold the printer instead of dispatching when FINISHED arrives with no tracked job (the design's ask-the-operator answer). Explicitly named change to scheduler.js.
+
+**Every fix requires:** a regression test that fails without it, the double-fire analysis (restart, MQTT reconnect, poll flap) written into the PR body, changelog entry naming the audit finding, and no behavior change outside the named seams. PR 1's regression suite must stay green untouched.
+
+**Do NOT:** touch drivers, widen scope to the Should-fix list (separate later brief), or rewrite the ceiling query beyond what fix 3 needs.
