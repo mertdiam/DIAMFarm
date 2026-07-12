@@ -108,8 +108,19 @@ export default function App() {
         {/* Sidebar (desktop) */}
         <nav id="sidebar">
           <div style={{ padding: '0 6px 16px', borderBottom: '1px solid #1e2433', marginBottom: 8 }}>
-            <div style={{ fontWeight: 800, fontSize: 15, color: '#e2e8f0', lineHeight: 1.3 }}>{farmName}</div>
-            <div style={{ fontWeight: 400, fontSize: 11, color: '#475569' }}>Print Farm Manager</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <svg width="19" height="23" viewBox="0 0 64 64" aria-hidden="true" style={{ flex: 'none' }}>
+                <rect x="21" y="12" width="22" height="12" rx="2.5" fill="#e2e8f0" />
+                <path d="M25 24 H39 L33.5 39 H30.5 Z" fill="#e2e8f0" />
+                <rect x="30" y="38.6" width="4" height="2" rx="0.6" fill="#e2e8f0" />
+                <line x1="32" y1="41" x2="32" y2="47" stroke="#2563eb" strokeWidth="2.6" strokeLinecap="round" />
+                <rect x="24.5" y="49" width="15" height="3.4" rx="1.7" fill="#2563eb" />
+              </svg>
+              <div style={{ fontSize: 17, letterSpacing: '-0.01em', lineHeight: 1, color: '#e2e8f0', fontFamily: '"Montserrat","Century Gothic","Futura","Avenir Next",system-ui,sans-serif' }}>
+                <span style={{ fontWeight: 300 }}>DIAM</span><span style={{ fontWeight: 800 }}>FARM</span>
+              </div>
+            </div>
+            <div style={{ fontWeight: 400, fontSize: 11, color: '#475569', marginTop: 6 }}>{farmName}</div>
           </div>
           {navItems.map((item) => (
             <NavLink key={item.to} to={item.to} end={item.to === '/' || !!item.end} style={navLinkStyle}>
@@ -123,7 +134,16 @@ export default function App() {
 
         {/* Top nav bar (mobile) */}
         <nav id="topbar">
-          <span style={{ fontWeight: 800, fontSize: 14, color: '#e2e8f0', marginRight: 8 }}>{farmName}</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 8 }}>
+            <svg width="15" height="18" viewBox="0 0 64 64" aria-hidden="true" style={{ flex: 'none' }}>
+              <rect x="21" y="12" width="22" height="12" rx="2.5" fill="#e2e8f0" />
+              <path d="M25 24 H39 L33.5 39 H30.5 Z" fill="#e2e8f0" />
+              <circle cx="32" cy="49" r="4.5" fill="#2563eb" />
+            </svg>
+            <span style={{ fontSize: 14, color: '#e2e8f0', fontFamily: '"Montserrat","Century Gothic","Futura","Avenir Next",system-ui,sans-serif' }}>
+              <span style={{ fontWeight: 300 }}>DIAM</span><span style={{ fontWeight: 800 }}>FARM</span>
+            </span>
+          </span>
           {navItems.map((item) => (
             <NavLink
               key={item.to}

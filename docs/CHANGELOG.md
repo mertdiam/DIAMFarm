@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-07-12: DIAMFARM brand mark (favicon, sidebar lockup)
+
+Gave the fork its own identity in the DIAM house style (carried from DIAMCORE:
+geometric wordmark, DIAM light plus the product word bold). The symbol is an
+extruder nozzle laying a bead of filament, the one spot of the app's action blue.
+The browser favicon becomes a self-contained tile (nozzle on the app surface
+colour) so it reads on light and dark tabs. The sidebar and mobile header show the
+nozzle mark plus the DIAMFARM wordmark, with the operator's configured farm name
+kept as the sub-line. In-app the wordmark is solid at small size; the large-format
+layer-seam treatment lives in the brand sheet, not the 17px sidebar.
+
+### Changes
+- client/public/favicon.svg: replaced the placeholder with the DIAMFARM nozzle tile.
+- client/src/App.jsx: sidebar and mobile-topbar brand now show the nozzle icon and
+  the DIAM (light) FARM (bold) wordmark; farm name moved to the sub-line.
+- client/index.html: page title set to DIAMFARM.
+
+---
+
 ## 2026-07-12: Run the container as a non-root user, add a healthcheck
 
 Two hardening items the Phase 0 audit flagged as Should-fix. The runtime image
