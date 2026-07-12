@@ -38,6 +38,9 @@ WORKDIR /app
 COPY package.json ./
 COPY --from=server-deps /app/node_modules ./node_modules
 COPY server ./server
+# Operational scripts (seed-admin, auth smoke) must ship in the production
+# image: the first-admin seed runs inside the deployed container's terminal.
+COPY scripts ./scripts
 COPY --from=client-build /app/client/dist ./client/dist
 
 # Persistent state — mount volumes here in production (see docker-compose.yml)

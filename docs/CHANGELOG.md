@@ -2,6 +2,19 @@
 
 ---
 
+## 2026-07-12: Ship operational scripts in the production image
+
+Seeding the first admin failed on the deployed Coolify container with
+MODULE_NOT_FOUND: the runtime Docker stage copied server/ and client/dist but
+never scripts/, so scripts/seed-admin.mjs did not exist inside the image. The
+seed script is an operational tool that runs in the deployed container's
+terminal, so it belongs in the production image.
+
+### Changes
+- Dockerfile: runtime stage now copies scripts/ into the image.
+
+---
+
 ## 2026-07-12: Fix Docker build ERESOLVE on better-auth peer dependency
 
 The production Docker build failed at the first `npm ci` (deps stage) with an
