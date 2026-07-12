@@ -223,3 +223,38 @@ When Phase 2 starts, expand these into full file-scoped briefs using T2-T4 above
 **Every fix requires:** a regression test that fails without it, the double-fire analysis (restart, MQTT reconnect, poll flap) written into the PR body, changelog entry naming the audit finding, and no behavior change outside the named seams. PR 1's regression suite must stay green untouched.
 
 **Do NOT:** touch drivers, widen scope to the Should-fix list (separate later brief), or rewrite the ceiling query beyond what fix 3 needs.
+
+---
+
+### TASK 7 - Printer Network Discovery + Bulk Add (Mert-requested, approved 2026-07-12)
+
+**Tier:** Opus implements. Sonnet first-pass review, Fable merges. **Phase:** post-launch-prep, runs before Phase 2.
+
+**Goal:** SimplyPrint-style onboarding: scan the LAN for Bambu printers, present a review list, add the selected ones in one action. Launch scope is Bambu discovery only; the module layout must leave room for other brands later without rework.
+
+**Protocol rule (CLAUDE.md non-negotiable 4):** read the OpenBambuAPI discovery documentation before writing the scanner. If the discovery mechanism is not documented there, stop and say so. Cite the doc in the module header.
+
+**Two discovery strategies, both shipped:**
+1. Passive announcement listening (works on bare metal / host networ
+---
+
+### TASK 7 - Printer Network Discovery + Draft Bulk-Add (Phase 2)
+
+**Tier:** Opus implements (new subsystem touching Bambu protocol knowledge), Fable review, human verify on the real VLAN. **Sign-off:** Mert requested this feature directly (scope-growth escalation satisfied).
+**Phase:** 2. **Depends on:** auth + redaction merged (done).
+
+**Goal:** Find Bambu printers on the network and add them in bulk, SimplyPrint style. Two discovery paths (Mert chose both): passive SSDP/mDNS listen (same-L2), and an explicit IP-range scan (works across a routed VLAN where multicast does not). Discovered printers are added as DRAFTS (empty access code) so codes are filled in later.
+
+**Protocol (VERIFY against github.com/Doridian/OpenBambuAPI before coding; do not guess):** Bambu LAN-mode SSDP beacon (UDP, the printer broadcasts model/serial/name/IP), and the LAN service ports (MQTT TLS 8883, FTPS 990) used to fingerprint a host during an IP scan. Access codes are NEVER discoverable (they are the LAN secret) - discovery yields identity + address only.
+
+**Draft model (firm):** a discovered printer is created through the existing create path with `api_key = ''` and normal `is_active = 1`. The Bambu driver's getStatus returns OFFLINE without a valid code (never throws, per contract), the scheduler never dispatches to OFFLINE, so drafts are visible in the fleet as OFFLINE-needs-setup with zero new state semantics and no hold-bypass. Operator opens PrinterDetail (PR 3 already made the code field write-only with a "not set" placeholder) and enters the code to bring it online. Do NOT invent a new draft column or reuse is_held.
+
+**Server (new):** `server/lib/discovery.js` (SSDP UDP listener via node dgram + IP-range TCP probe; time-boxed, never throws, returns identity+ip records deduped by serial/ip). Routes on printers router: `POST /api/printers/discover` (body: `{ method: 'ssdp'|'scan', subnet? }`, admin-gated, returns found list with a per-row `already_known` flag cross-checked against existing printers by serial/ip), and `POST /api/printers/discover/add` (bulk create selected as drafts; reuses the model-validation + group auto-register logic; transactional; returns created count + skipped duplicates). No new dependency if node dgram/net suffice; if an SSDP lib is truly needed, flag it as a new-dependency escalation first.
+
+**Client (new):** a Discovery panel in Settings (near CSV Import): a Scan button (SSDP) and a subnet field + Scan button (range), a results table (model / serial / IP / already-known), per-row checkboxes, model + group pickers, and Add Selected. House palette, toast/confirm, 600px. After add, point the operator at the detail page to enter codes.
+
+**Tests:** discovery module with a mocked dgram socket (fed a captured SSDP packet) and a mocked net probe; route tests for discover (success, empty, dedup flag) and discover/add (drafts created with empty api_key, duplicates skipped, model validation, admin gate). Redaction still holds (drafts have no code to leak). Full suite green.
+
+**Docs:** api.md (both endpoints), web-app.md (the Settings panel), installation.md (a note that SSDP needs same-L2 or an mDNS reflector, IP-scan for routed VLANs - directly relevant to the diamcore-box-reaches-printer-VLAN question), CHANGELOG.
+
+**Do NOT:** modify the Bambu driver files, scheduler, or db schema; auto-connect or probe outside the given subnet; ever try to obtain/guess an access code.
