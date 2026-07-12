@@ -8,7 +8,7 @@ The React single-page application served by Vite. In development, Vite runs on p
 - **Fleet page** — live grid of all active printers with status, filterable and searchable
 - **Printers page** — searchable directory of all printers (active and decommissioned); click any row to open the detail view
 - **Printer detail view** — per-machine event timeline, inline note form, printer header
-- **Settings page** — CSV import UI for the printer registry, with flagged-row resolution
+- **Settings page** manages the printer registry: add printer, CSV import with flagged-row resolution, and network discovery (SSDP / IP-range scan) with draft bulk-add
 - **Projects page** — project/part/G-code management and production tracking
 - **Jobs page** — live job queue with filters and cancel action
 
@@ -22,7 +22,7 @@ The React single-page application served by Vite. In development, Vite runs on p
 | `client/src/pages/Printers.jsx` | Searchable all-printers directory |
 | `client/src/pages/PrinterDetail.jsx` | Per-printer event timeline and note form |
 | `client/src/pages/Decommissioned.jsx` | Decommissioned printer list with notes and recommission |
-| `client/src/pages/Settings.jsx` | CSV import, flagged-row resolution, printer models |
+| `client/src/pages/Settings.jsx` | Add printer, CSV import, flagged-row resolution, network discovery, printer models |
 | `client/src/pages/Dashboard.jsx` | TV command center dashboard |
 | `client/src/pages/Projects.jsx` | Project/Part/G-code management |
 | `client/src/pages/Jobs.jsx` | Job queue table with filters |
@@ -214,7 +214,9 @@ Responsive grid of decommissioned printers — printers that have been pulled fr
 
 Flagged rows are echoed back with the access code redacted: the row carries `api_key_set` (presence only), never the raw code, so plaintext access codes are not returned in the import response.
 
-**Section order** (tuned for first-run flow): Server Alerts → Printer Models → Groups → Filament Library → Add Printer → CSV Import → Farm Name → Dispatch Settings → Farm Backup → Polling info. Models, Groups, and Filaments come first because the Add Printer form depends on them.
+**Section order** (tuned for first-run flow): Server Alerts → Printer Models → Groups → Filament Library → Add Printer → CSV Import → Discover Printers → Farm Name → Dispatch Settings → Farm Backup → Polling info. Models, Groups, and Filaments come first because the Add Printer form depends on them.
+
+**Discover Printers section:** finds Bambu printers on the network and adds the selected ones as drafts, SimplyPrint-style. A **Scan (SSDP)** button passively listens for LAN-mode announcement beacons on the same network segment; a subnet input plus **Scan Range** button probes every address in a `/24` (for a routed VLAN where multicast does not reach). Both call `POST /api/printers/discover`. Results render in a table (horizontally scrollable on narrow screens) with a per-row checkbox, the detected identity (name, source, serial, model), the IP, a per-row Model picker (Bambu models only, prefilled from the detected model when it matches), and a Group `<datalist>` autocomplete. A row already in the fleet (matched by serial or IP, `already_known`) shows an "added" marker instead of a checkbox and cannot be re-selected. **Add Selected** posts the checked rows to `POST /api/printers/discover/add`; rows with no announced name are named from their IP (`Bambu_192_168_1_42`) so the required name field is always filled. After adding, a success toast tells the operator to open each printer's detail page to enter its access code and bring it online, and a warning toast reports any rows skipped as duplicates. Discovery returns identity and address only: it never carries an access code, so nothing sensitive is exposed even though drafts have no code to leak.
 
 **Groups section:** lists every registered group (`GET /api/groups`) with a Delete button per row and a name-only add form (`POST /api/groups`). Modeled on the Printer Models section, minus the type/color hierarchy Filament Library has. Deleting a group is blocked with an inline error naming the printer/G-code/project count still referencing it (`DELETE /api/groups/:name`, `409`). A group doesn't have to be created here first: typing a new name on a printer (Add Printer form, Printers bulk-edit, PrinterDetail, or CSV import) registers it automatically; this section exists for pre-creating a group before any printer uses it, and for cleanup.
 

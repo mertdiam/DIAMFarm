@@ -147,6 +147,17 @@ export default function Settings() {
   const [addError, setAddError] = useState(null);
   const [adding, setAdding] = useState(false);
 
+  // Printer discovery (SSDP passive listen / IP-range scan). Bambu only for now.
+  const [discoverResults, setDiscoverResults] = useState([]);   // [{name,model,serial,ip,source,already_known}]
+  const [discovering, setDiscovering] = useState(false);
+  const [busyMethod, setBusyMethod] = useState(null);           // 'ssdp' | 'scan' while running
+  const [discoverError, setDiscoverError] = useState(null);
+  const [scanSubnet, setScanSubnet] = useState('');
+  const [selectedRows, setSelectedRows] = useState({});         // index -> bool
+  const [rowModel, setRowModel] = useState({});                 // index -> model_id
+  const [rowGroup, setRowGroup] = useState({});                 // index -> group name
+  const [addingDiscovered, setAddingDiscovered] = useState(false);
+
   // Keep the Model select's value valid whenever the available models change for the
   // selected brand — e.g. adding a printer model in the section above while this form is
   // open. Without this, the <select> can visually show the newly-added option (the browser
@@ -453,6 +464,109 @@ export default function Settings() {
       }));
     } catch (err) {
       showToast(`Error: ${err.message}`, 'error');
+    }
+  }
+
+  // Discovery helpers ---------------------------------------------------------
+  const bambuModels = allModels.filter(m => m.connector === 'bambu');
+  // A discovered device may have no announced name (an IP scan yields address only). Fall back
+  // to a stable name derived from the IP so the required name field is always populated.
+  const draftName = (r) => (r.name && r.name.trim()) || `Bambu_${(r.ip || '').replace(/\./g, '_')}`;
+
+  async function handleDiscover(method) {
+    setDiscoverError(null);
+    if (method === 'scan' && !scanSubnet.trim()) {
+      setDiscoverError('Enter a subnet to scan, e.g. 192.168.1.0/24');
+      return;
+    }
+    setDiscovering(true);
+    setBusyMethod(method);
+    try {
+      const res = await fetch('/api/printers/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(method === 'scan' ? { method, subnet: scanSubnet.trim() } : { method }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Discovery failed (${res.status})`);
+      const found = data.found || [];
+      const defaultModel = bambuModels[0]?.model_id || '';
+      const rm = {}; const rg = {};
+      found.forEach((r, i) => { rm[i] = r.model && bambuModels.some(m => m.model_id === r.model) ? r.model : defaultModel; rg[i] = ''; });
+      setRowModel(rm);
+      setRowGroup(rg);
+      setSelectedRows({});
+      setDiscoverResults(found);
+      if (found.length === 0) {
+        showToast(method === 'ssdp'
+          ? 'No printers announced during the listen window.'
+          : 'No printers responded on the scanned subnet.', 'warning');
+      }
+    } catch (err) {
+      setDiscoverError(err.message);
+    } finally {
+      setDiscovering(false);
+      setBusyMethod(null);
+    }
+  }
+
+  const selectableCount = discoverResults.filter((r, i) => selectedRows[i] && !r.already_known).length;
+
+  function toggleSelectAll() {
+    const anySelected = selectableCount > 0;
+    if (anySelected) {
+      setSelectedRows({});
+    } else {
+      const next = {};
+      discoverResults.forEach((r, i) => { if (!r.already_known) next[i] = true; });
+      setSelectedRows(next);
+    }
+  }
+
+  async function handleAddSelected() {
+    const rows = discoverResults
+      .map((r, i) => ({ r, i }))
+      .filter(({ r, i }) => selectedRows[i] && !r.already_known);
+    if (rows.length === 0) return;
+
+    // Guard: every selected row needs a model chosen before it can be added.
+    const missingModel = rows.some(({ i }) => !rowModel[i]);
+    if (missingModel) {
+      showToast('Pick a model for every selected printer first.', 'error');
+      return;
+    }
+
+    const payload = rows.map(({ r, i }) => ({
+      name: draftName(r),
+      ip: r.ip,
+      serial_number: r.serial || '',
+      model: rowModel[i],
+      group_name: (rowGroup[i] && rowGroup[i].trim()) || null,
+    }));
+
+    setAddingDiscovered(true);
+    try {
+      const res = await fetch('/api/printers/discover/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ printers: payload }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Add failed (${res.status})`);
+      showToast(`${data.added} printer(s) added as drafts. Open each printer's detail page to enter its access code and bring it online.`, 'success');
+      if (data.skipped && data.skipped.length) {
+        showToast(`${data.skipped.length} skipped (already registered).`, 'warning');
+      }
+      // Mark the rows we just added so they cannot be re-added, and clear the selection.
+      const addedIdx = new Set(rows.map(({ i }) => i));
+      setDiscoverResults(prev => prev.map((r, i) => (addedIdx.has(i) ? { ...r, already_known: true } : r)));
+      setSelectedRows({});
+      // Refresh the group list so any newly-registered group shows in pickers.
+      fetch('/api/groups').then(r => r.json()).then(setAllGroups).catch(() => {});
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setAddingDiscovered(false);
     }
   }
 
@@ -1098,6 +1212,160 @@ export default function Settings() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+      </section>
+
+      {/* Discover Printers */}
+      <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Discover Printers</h2>
+        <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
+          Find Bambu printers on the network and add the selected ones as drafts. SSDP listens for
+          announcement beacons on the same network segment; a range scan probes every address in a
+          subnet (use this across a routed VLAN where multicast does not reach). Discovery finds a
+          printer's identity and address only, never its access code: after adding, open each
+          printer's detail page to enter its access code and bring it online.
+        </p>
+        <p style={{ color: '#fbbf24', fontSize: 12, marginBottom: 16 }}>
+          Note: the SSDP beacon format is not documented by Bambu, so passive scan is implemented
+          from standards and not yet validated on real hardware. If SSDP finds nothing, use the
+          range scan, which probes the confirmed Bambu LAN ports.
+        </p>
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+          <button
+            type="button"
+            onClick={() => handleDiscover('ssdp')}
+            disabled={discovering}
+            style={{
+              background: discovering ? '#1e40af' : '#2563eb',
+              color: '#fff', border: 'none', borderRadius: 6, padding: '8px 16px',
+              fontSize: 13, fontWeight: 600,
+              cursor: discovering ? 'not-allowed' : 'pointer', opacity: discovering ? 0.7 : 1,
+            }}
+          >
+            {discovering && busyMethod === 'ssdp' ? 'Listening…' : 'Scan (SSDP)'}
+          </button>
+          <span style={{ color: '#475569', fontSize: 12 }}>or</span>
+          <input
+            value={scanSubnet}
+            onChange={e => setScanSubnet(e.target.value)}
+            placeholder="192.168.1.0/24"
+            style={{ ...inputStyle, width: 180, flex: '0 0 auto' }}
+          />
+          <button
+            type="button"
+            onClick={() => handleDiscover('scan')}
+            disabled={discovering}
+            style={{
+              background: discovering ? '#1e293b' : '#334155',
+              color: '#e2e8f0', border: '1px solid #475569', borderRadius: 6, padding: '8px 16px',
+              fontSize: 13, fontWeight: 600,
+              cursor: discovering ? 'not-allowed' : 'pointer', opacity: discovering ? 0.7 : 1,
+            }}
+          >
+            {discovering && busyMethod === 'scan' ? 'Scanning…' : 'Scan Range'}
+          </button>
+        </div>
+
+        {bambuModels.length === 0 && (
+          <div style={{ fontSize: 12.5, color: '#fbbf24', marginBottom: 12 }}>
+            No Bambu models configured yet. Add one in the Printer Models section above before adding discovered printers.
+          </div>
+        )}
+
+        {discoverError && (
+          <div style={{ marginBottom: 14, background: '#7f1d1d', borderRadius: 6, padding: '10px 14px', color: '#fca5a5', fontSize: 13 }}>
+            {discoverError}
+          </div>
+        )}
+
+        {discoverResults.length > 0 && (
+          <div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 14 }}>
+                <thead>
+                  <tr style={{ color: '#64748b', textAlign: 'left', borderBottom: '1px solid #334155' }}>
+                    <th style={{ padding: '4px 8px' }}>
+                      <input
+                        type="checkbox"
+                        checked={selectableCount > 0}
+                        onChange={toggleSelectAll}
+                        aria-label="Select all"
+                      />
+                    </th>
+                    <th style={{ padding: '4px 8px' }}>Found</th>
+                    <th style={{ padding: '4px 8px' }}>IP</th>
+                    <th style={{ padding: '4px 8px' }}>Model</th>
+                    <th style={{ padding: '4px 8px' }}>Group</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {discoverResults.map((r, i) => (
+                    <tr key={`${r.ip}-${r.serial || i}`} style={{ borderBottom: '1px solid #1a2030' }}>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                        {r.already_known ? (
+                          <span style={{ color: '#4ade80', fontSize: 11.5 }}>added</span>
+                        ) : (
+                          <input
+                            type="checkbox"
+                            checked={!!selectedRows[i]}
+                            onChange={e => setSelectedRows(p => ({ ...p, [i]: e.target.checked }))}
+                            aria-label={`Select ${draftName(r)}`}
+                          />
+                        )}
+                      </td>
+                      <td style={{ padding: '6px 8px', color: '#e2e8f0' }}>
+                        <div>{draftName(r)}</div>
+                        <div style={{ color: '#64748b', fontSize: 11.5 }}>
+                          {r.source.toUpperCase()}{r.serial ? ` · ${r.serial}` : ''}{r.model ? ` · ${r.model}` : ''}
+                        </div>
+                      </td>
+                      <td style={{ padding: '6px 8px', color: '#94a3b8', fontFamily: 'monospace' }}>{r.ip || '-'}</td>
+                      <td style={{ padding: '6px 8px' }}>
+                        <select
+                          value={rowModel[i] || ''}
+                          onChange={e => setRowModel(p => ({ ...p, [i]: e.target.value }))}
+                          disabled={r.already_known || bambuModels.length === 0}
+                          style={{ ...inputStyle, width: 130 }}
+                        >
+                          {bambuModels.length === 0
+                            ? <option value="">(none)</option>
+                            : bambuModels.map(m => <option key={m.model_id} value={m.model_id}>{m.label}</option>)}
+                        </select>
+                      </td>
+                      <td style={{ padding: '6px 8px' }}>
+                        <input
+                          value={rowGroup[i] || ''}
+                          onChange={e => setRowGroup(p => ({ ...p, [i]: e.target.value }))}
+                          disabled={r.already_known}
+                          placeholder="Rack A"
+                          list="discover-group-options"
+                          style={{ ...inputStyle, width: 120 }}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <datalist id="discover-group-options">
+              {allGroups.map(g => <option key={g.name} value={g.name} />)}
+            </datalist>
+            <button
+              type="button"
+              onClick={handleAddSelected}
+              disabled={addingDiscovered || selectableCount === 0}
+              style={{
+                background: (addingDiscovered || selectableCount === 0) ? '#1e40af' : '#2563eb',
+                color: '#fff', border: 'none', borderRadius: 6, padding: '8px 18px',
+                fontSize: 13, fontWeight: 600,
+                cursor: (addingDiscovered || selectableCount === 0) ? 'not-allowed' : 'pointer',
+                opacity: (addingDiscovered || selectableCount === 0) ? 0.7 : 1,
+              }}
+            >
+              {addingDiscovered ? 'Adding…' : `Add Selected (${selectableCount})`}
+            </button>
           </div>
         )}
       </section>

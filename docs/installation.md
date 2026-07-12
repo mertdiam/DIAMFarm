@@ -232,6 +232,15 @@ Windows Firewall may block connections from other devices on the network. To all
 **macOS**
 macOS does not block outbound connections and generally allows LAN traffic by default. If you have manually enabled the macOS Application Firewall (System Settings → Network → Firewall), you may need to add an exception, but most users will not need to do anything here.
 
+### Printer discovery (SSDP vs IP-range scan)
+
+The Settings page can find Bambu printers on the network (see the Discover Printers section in [web-app.md](web-app.md)). Which of the two strategies works depends on how your network is laid out:
+
+- **SSDP (passive listen)** relies on UDP multicast, which does not cross routers. It only sees printers on the **same layer-2 segment** as the server. If the server sits on a different VLAN or subnet from the printers, SSDP finds nothing unless your network provides an **mDNS/SSDP reflector** (also called an mDNS repeater or IGMP-proxy) that forwards multicast between those segments. SSDP also needs inbound UDP allowed to the server, which the macOS/Windows firewall notes above cover for the app's own traffic.
+- **IP-range scan** uses direct TCP connections to each address in a `/24`, so it works **across a routed VLAN** as long as the server can reach the printer subnet (the router permits the traffic). This is the reliable option when the server and printers are on different subnets: enter the printers' subnet (for example `10.20.30.0/24`) and use Scan Range.
+
+Discovery never retrieves a printer's access code (that is the LAN secret). It finds identity and address only; you enter each access code afterward on the printer's detail page.
+
 ---
 
 ## Running the Server

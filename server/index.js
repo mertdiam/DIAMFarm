@@ -83,6 +83,8 @@ let server;
     ['put',    '/api/printers/:id'],
     ['delete', '/api/printers/:id'],
     ['post',   '/api/printers/import'],
+    ['post',   '/api/printers/discover'],
+    ['post',   '/api/printers/discover/add'],
     ['post',   '/api/printers/:id/decommission'],
     ['post',   '/api/printers/:id/complete-and-decommission'],
     ['post',   '/api/printers/:id/recommission'],
