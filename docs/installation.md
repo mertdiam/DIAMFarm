@@ -173,6 +173,8 @@ The app requires a login. Set these environment variables before starting the se
 | Variable | Required | Description |
 |---|---|---|
 | `BETTER_AUTH_SECRET` | Yes | Signing secret for sessions. Generate one with `npx auth@1.6.23 secret` and keep it stable (changing it logs everyone out). |
+
+Note: `BETTER_AUTH_SECRET` is required even for `DEMO_MODE=true` development runs (the server fails fast without it), and the demo database still needs one seeded admin to log in with.
 | `BETTER_AUTH_URL` | Recommended | The base URL operators use, e.g. `http://192.168.1.50:3000`. Defaults to `http://localhost:3000`. |
 | `BETTER_AUTH_TRUSTED_ORIGINS` | Recommended | Comma-separated list of every origin operators open the app from (LAN IP, mDNS name). Logins from an origin not listed here are rejected. Wildcards like `http://192.168.1.*:3000` are supported. Defaults to `BETTER_AUTH_URL`. |
 

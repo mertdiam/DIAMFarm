@@ -38,6 +38,10 @@ Testing note: the repo's jest runs CommonJS and cannot import the ESM-only Bette
 - docs/server.md: middleware order and the auth bootstrap documented; env var table updated.
 - docs/database.md: auth tables documented.
 - docs/README.md: note the auth tables and the reference schema file.
+- server/auth.mjs (review fixes): fail fast at startup when BETTER_AUTH_SECRET is unset (Better Auth alone only enforces this under NODE_ENV=production, which the Windows farm deploy does not reliably set), and fall back to baseURL when BETTER_AUTH_TRUSTED_ORIGINS parses to an empty list.
+- docs/api.md (review fix): document the 5 minute session cookie cache staleness window for role changes, bans, and revocations.
+- docs/installation.md (review fix): note that DEMO_MODE runs also require BETTER_AUTH_SECRET and a seeded admin.
+- .npmrc, client/.npmrc: legacy-peer-deps=true so plain npm install works despite better-auth's optional better-sqlite3 ^12 peer range (repo pins 9.6.0); remove when better-sqlite3 is bumped in a later PR.
 - docs/CHANGELOG.md: this entry.
 
 ---

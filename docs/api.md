@@ -26,6 +26,8 @@ Authentication is provided by Better Auth (pinned to 1.6.23) and mounted at `/ap
 
 Every `/api/*` route requires an authenticated session EXCEPT `/api/auth/*` (the auth handler itself) and `/api/health`. The session cookie is sent automatically by the browser on same-origin requests, so the existing client `fetch('/api/...')` calls need no change.
 
+Sessions use a 5 minute cookie cache (`session.cookieCache`, maxAge 300): a role change, ban, or session revocation can take up to 5 minutes to bite on requests that ride the cached cookie. For a 10 person LAN this trade was accepted for one fewer DB read per request; revoke-and-wait applies when it matters.
+
 - No or invalid session: `401 { "error": "Authentication required" }`
 - Authenticated but missing the required role on an admin-only route: `403 { "error": "Forbidden: requires admin role" }`
 
@@ -75,7 +77,7 @@ State-changing POSTs require an `Origin` header that matches a trusted origin (b
 
 | Variable | Default | Description |
 |---|---|---|
-| `BETTER_AUTH_SECRET` | (none) | Signing secret. Required in production; generate with `npx auth@1.6.23 secret`. |
+| `BETTER_AUTH_SECRET` | (none) | Signing secret. Required always: the server refuses to start without it. Generate with `npx auth@1.6.23 secret`. |
 | `BETTER_AUTH_URL` | `http://localhost:3000` | Base URL of the deployment. |
 | `BETTER_AUTH_TRUSTED_ORIGINS` | the base URL | Comma-separated list of origins allowed to POST. Add every LAN origin (IP and mDNS name) operators reach the app from, or their logins fail CSRF. Wildcards like `http://192.168.1.*:3000` are supported. |
 

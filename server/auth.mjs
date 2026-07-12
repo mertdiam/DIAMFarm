@@ -30,12 +30,25 @@ import db from './db.js';
 
 const baseURL = process.env.BETTER_AUTH_URL || 'http://localhost:3000';
 
+// Fail fast on a missing signing secret. Better Auth only throws for this when
+// NODE_ENV is 'production', and the Windows farm deployment (PM2, update.bat) does
+// not reliably set NODE_ENV, so without this guard a forgotten env var means the
+// server silently runs on a default signing key.
+if (!process.env.BETTER_AUTH_SECRET) {
+  throw new Error(
+    'BETTER_AUTH_SECRET is not set. Generate one with: npx auth@1.6.23 secret'
+  );
+}
+
 // Trusted origins: comma-separated env list (wildcards like http://192.168.1.*:3000 are
-// supported by Better Auth). Defaults to just the baseURL when unset.
-const trustedOrigins = (process.env.BETTER_AUTH_TRUSTED_ORIGINS || baseURL)
+// supported by Better Auth). Defaults to just the baseURL when unset, and also when the
+// env var parses to an empty list (e.g. a value of only commas), which would otherwise
+// silently reject every state-changing request as a CSRF failure.
+let trustedOrigins = (process.env.BETTER_AUTH_TRUSTED_ORIGINS || baseURL)
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+if (trustedOrigins.length === 0) trustedOrigins = [baseURL];
 
 // Access control: operator inherits the admin plugin's userAc statements (no user-management
 // verbs); admin inherits adminAc (full user management). Custom roles MUST be registered here
