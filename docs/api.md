@@ -425,9 +425,32 @@ Returns `404` if not found.
 
 Optional query param `?part_id=N` to filter by part.
 
-Returns all G-code records. Each record includes `part_id`, `printer_model`, `filename`, `filepath`, `parts_per_plate`, `est_print_secs`, `material_grams`, `ams_slot`, `created_at`.
+Returns all G-code records. Each record includes `part_id`, `printer_model`, `filename`, `filepath`, `parts_per_plate`, `est_print_secs`, `material_grams`, `ams_slot`, `header_meta`, `created_at`.
 
 `filepath` stores only the filename (not an absolute path) — the server resolves the full path at runtime using its own `server/gcode/` directory. This makes the DB portable across machines.
+
+`header_meta` is the slicer metadata extracted from the uploaded file at upload time, returned as a parsed object (or `null` for records uploaded before this feature, or when nothing could be extracted). It is stored as JSON text in the database and exposed as an object in every G-code response. Shape:
+
+```json
+{
+  "format": "3mf",
+  "slicer": "BambuStudio",
+  "slicer_version": "01.10.01.50",
+  "printer_model": "Bambu Lab A1 mini",
+  "printer_model_id": "N1",
+  "nozzle_diameters": [0.4],
+  "filament_types": ["PLA"],
+  "filament_colors": ["#FFFFFF"],
+  "estimated_time_s": 369,
+  "layer_height_mm": 0.2,
+  "total_layers": 25,
+  "filament_used_g": [19.1],
+  "filament_used_mm": [6400],
+  "warnings": []
+}
+```
+
+`format` is one of `gcode`, `3mf`, `bgcode`, or `unknown`. Any field the parser could not source is `null` (scalars) or `[]` (lists); `warnings` carries human-readable notes about anything unusual. See `docs/server.md` for the field reference and `docs/internal/header-parser-spec.md` (fork-internal) for the extraction contract.
 
 ### `POST /api/gcodes/parse-filename`
 
@@ -463,7 +486,9 @@ Upload a G-code file and create a DB record. `Content-Type: multipart/form-data`
 - `material_grams` (optional) — per-plate material weight in grams
 - `ams_slot` (optional) — Bambu only
 
-Returns `201` with created G-code record. Returns `409` if a G-code for this `(part_id, printer_model)` combination already exists.
+On a successful upload the server parses the uploaded file's slicer header and stores the result in the record's `header_meta` field (see `GET /api/gcodes` for the shape). Parsing never fails the upload: if the file cannot be read or is an unrecognized format, `header_meta` is a null-filled object with a `warnings` note rather than an error.
+
+Returns `201` with the created G-code record (including `header_meta`). Returns `409` if a G-code for this `(part_id, printer_model)` combination already exists.
 
 ### `PUT /api/gcodes/:id`
 
