@@ -400,6 +400,14 @@ describe('handler source invariants (guards against replica drift)', () => {
     expect(setReady).toContain('db.transaction(');
   });
 
+  test('transaction re-reads is_held and bails without crediting (FIX 2 defense in depth)', () => {
+    // Pins the in-transaction re-check specifically: the hold must be re-read from the DB
+    // inside the transaction and the credit skipped when it is already released. Reverting
+    // just that line would otherwise keep every other test green.
+    expect(setReady).toMatch(/SELECT is_held FROM printers WHERE id = \?/);
+    expect(setReady).toMatch(/if \(!held \|\| !held\.is_held\) return;/);
+  });
+
   test('session-failed fallback has the newer-job scope guard (FIX 1b)', () => {
     expect(setReady).toMatch(/NOT EXISTS\s*\(\s*SELECT 1 FROM jobs newer WHERE newer\.printer_id = j\.printer_id AND newer\.id > j\.id/);
   });
