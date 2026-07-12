@@ -81,6 +81,10 @@ function freshDb() {
   const db = new Database(':memory:');
   db.pragma('foreign_keys = ON');
   db.exec(`
+    CREATE TABLE printer_groups (
+      name        TEXT PRIMARY KEY,
+      created_at  INTEGER NOT NULL
+    );
     CREATE TABLE printers (
       id                 INTEGER PRIMARY KEY AUTOINCREMENT,
       name               TEXT NOT NULL UNIQUE,
