@@ -1,23 +1,37 @@
-# Internal fork helper: builds the production image exactly as Coolify does
-# (dockerfile buildpack, target runtime) so build failures are diagnosable in
-# CI logs. Coolify's API does not expose build logs; this workflow is the
-# fork's visibility into them. Manual trigger only.
-name: fork-build-check
+# Internal fork image publish: builds the production (runtime target) image in CI
+# and pushes it to ghcr.io/mertdiam/diamfarm. Coolify deploys this prebuilt image
+# instead of building on the farm server: on-host git builds proved undebuggable
+# (no build-log API) while image pulls work, and PLAN.md section 1 prefers pinned
+# prebuilt images anyway. Runs on every push to production and on manual dispatch.
+name: fork-image
 
 on:
   workflow_dispatch:
+  push:
+    branches: [production]
 
 jobs:
-  build:
+  build-push:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Build runtime image (no push)
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push runtime image
         uses: docker/build-push-action@v6
         with:
           context: .
           target: runtime
           platforms: linux/amd64
-          push: false
-          tags: diamfarm:build-check
+          push: true
+          tags: |
+            ghcr.io/mertdiam/diamfarm:production
+            ghcr.io/mertdiam/diamfarm:sha-${{ github.sha }}
