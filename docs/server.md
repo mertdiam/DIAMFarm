@@ -27,6 +27,14 @@
 6. Inside the listen callback, `PrinterPoller` and `JobScheduler` are instantiated. `scheduler.start()` is called first (subscribes to poller events), then `poller.start()` fires the first poll tick and starts the 15-second interval.
 7. The startup sweep (`sweepIdlePrinters`) is deferred until the poller emits `pollComplete` after its first tick. This ensures dispatch works from live printer state rather than stale DB values from before the last shutdown, preventing accidental dispatch to a printer that started printing while the server was down.
 
+## Scheduler FINISHED handling
+
+When a printer transitions to `FINISHED`, `scheduler._handleFinished` resolves it against a tracked job:
+
+1. A `printing` job for the printer is the normal case: it is marked `finished`, `completed_qty` is credited, and the printer is held for operator sign-off.
+2. If there is no `printing` job, a job marked `failed` during the current server process (gated on `finished_at > scheduler.startedAt`) is recovered to cover the Bambu MQTT reconnect race. The session gate prevents a stale `FINISHED` latched from before startup from crediting an old failed job.
+3. If there is no tracked job at all, the print was started outside the system (an operator ran a job directly on the printer, or a stale `FINISHED` latched from before this process). The scheduler does NOT dispatch onto that uncleared bed. Instead it holds the printer (`is_held = 1`) and writes a notification asking the operator to clear the bed and use Set Ready. Set Ready with no tracked job credits nothing and just releases the hold (see docs/api.md). This is the design's ask-the-operator answer to ambiguity rather than inferring the bed is clear.
+
 ## Configuration
 
 | Variable | Default | Description |
