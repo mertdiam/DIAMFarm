@@ -144,6 +144,32 @@ const uploadLabelSx = {
   marginBottom: 3,
 };
 
+// Humanize whole seconds into a compact "1h 6m" / "45s" style string.
+function humanizeSecs(secs) {
+  if (secs == null) return null;
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  const parts = [];
+  if (h) parts.push(h + 'h');
+  if (m) parts.push(m + 'm');
+  if (!h && s) parts.push(s + 's');
+  return parts.length ? parts.join(' ') : '0s';
+}
+
+// Build a one-line recap of the slicer metadata the server extracted on upload.
+// Returns null when nothing useful was parsed (e.g. a stripped or third-party file).
+function summarizeHeaderMeta(meta) {
+  if (!meta) return null;
+  const bits = [];
+  if (meta.printer_model) bits.push(meta.printer_model);
+  if (meta.filament_types && meta.filament_types.length) bits.push(meta.filament_types.join(', '));
+  if (meta.layer_height_mm != null) bits.push(meta.layer_height_mm + ' mm layer');
+  const t = humanizeSecs(meta.estimated_time_s);
+  if (t) bits.push('~' + t);
+  return bits.length ? bits.join(' · ') : null;
+}
+
 function GcodeUploadPanel({ part, onUploaded, filamentTypes, filamentColors, projectMaterial, projectColor }) {
   const [file, setFile]             = useState(null);
   const [partsPerPlate, setPPP]     = useState('');
@@ -182,6 +208,7 @@ function GcodeUploadPanel({ part, onUploaded, filamentTypes, filamentColors, pro
 
   const [parsedEstPrintSecs, setParsedEstPrintSecs] = useState(null);
   const [parsedMaterialGrams, setParsedMaterialGrams] = useState(null);
+  const [headerSummary, setHeaderSummary] = useState(null); // one-line slicer-metadata recap after upload
 
   async function handleFileChange(e) {
     const f = e.target.files[0];
@@ -190,6 +217,7 @@ function GcodeUploadPanel({ part, onUploaded, filamentTypes, filamentColors, pro
     setError(null);
     setParsedEstPrintSecs(null);
     setParsedMaterialGrams(null);
+    setHeaderSummary(null);
     try {
       const res = await fetch('/api/gcodes/parse-filename', {
         method: 'POST',
@@ -262,6 +290,8 @@ function GcodeUploadPanel({ part, onUploaded, filamentTypes, filamentColors, pro
         setParsedEstPrintSecs(null); setParsedMaterialGrams(null);
         setSelectedGroups([]); setRequiredMaterial(''); setRequiredColor('');
         if (fileInputRef.current) fileInputRef.current.value = '';
+        // Surface what the slicer-header parser extracted, if anything useful.
+        setHeaderSummary(summarizeHeaderMeta(data && data.header_meta));
         onUploaded();
       }
     } catch (err) {
@@ -354,6 +384,15 @@ function GcodeUploadPanel({ part, onUploaded, filamentTypes, filamentColors, pro
       <p style={{ margin: 0, fontSize: 11, color: '#475569' }}>
         Tip: filenames with a model, print time, and weight (e.g. <span className="mono">bracket_MK4S_2h30m_45g.gcode</span>) auto-fill these fields — you can adjust them after upload.
       </p>
+
+      {headerSummary && (
+        <p style={{
+          margin: 0, fontSize: 11, color: '#94a3b8',
+          background: '#0f172a', border: '1px solid #1e2433', borderRadius: 4, padding: '5px 10px',
+        }}>
+          Slicer header: {headerSummary}
+        </p>
+      )}
 
       {bambuNeedsThreemf && (
         <p style={{ margin: 0, fontSize: 12, color: '#b45309', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 4, padding: '5px 10px' }}>
