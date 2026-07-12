@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-07-12: Session auth and admin/operator roles (Better Auth)
+
+The internal fork's PR 2. The app previously had no authentication: anyone on the LAN who could reach port 3000 had full control of the fleet. This adds email and password session login and a two-role model on top of Better Auth (pinned to 1.6.23), so day-to-day operators can run production while only admins change infrastructure or manage accounts.
+
+Why Better Auth and how it is wired: Better Auth is an ESM-only package and this server is CommonJS, so the auth instance lives in its own module, server/auth.mjs, and server/index.js loads it through a small async bootstrap that dynamic-imports it. The auth handler is mounted at /api/auth/* before express.json(), because the JSON body parser would otherwise consume the request stream the auth handler needs and leave sign-in stuck. Better Auth points at the app's existing better-sqlite3 database (its built-in Kysely adapter), so its tables live in the same farm.db.
+
+How deploys get the schema: rather than depend on Better Auth's migration CLI at deploy time, the four auth tables (user, session, account, verification) plus the admin plugin columns (user.role/banned/banReason/banExpires, session.impersonatedBy) are created by server/db.js in the same CREATE TABLE IF NOT EXISTS pattern as every other table. A plain git pull plus restart applies them like any other additive migration, with no CLI step and no data loss on existing installs. The CLI-generated SQL is committed at docs/internal/better-auth-schema.sql purely as a reference artifact; the db.js block is a hand-translation of it. Verified at runtime: a real Better Auth instance signs users in, issues sessions, and enforces roles against these exact tables (scripts/auth-smoke.mjs).
+
+The role model. Two roles, built from the admin plugin's access-control statements: operator (the default for new accounts) can read everything and run production actions (gcode upload, queue and project edits, set-ready, batch set-ready, dispatch); admin additionally holds printer fleet lifecycle (create, update, delete, import, decommission, complete-and-decommission, recommission), infrastructure config (printer models, filament library, settings), backup export and restore, and user management. Public sign-up is disabled: accounts are created only by an admin (or the one-time seed script), never self-service. The role split is enforced server-side by two middleware factories (server/middleware/require-auth.js resolves the session or returns 401; server/middleware/require-role.js returns 403 without the role) applied in index.js to all /api/* except /api/auth/* and /api/health. The admin gating is one explicit method-and-path table in index.js so the route files stay untouched. Hiding the Users nav entry for operators in the client is a convenience; the server is the boundary.
+
+The JSON backup bundle intentionally does NOT include the auth tables. The existing export is a downloadable JSON file, and putting password hashes and live session tokens in a file an operator downloads would be a security regression; session and verification rows are also meaningless to restore. Auth data is covered instead by a file-level copy of farm.db (the same SQLite file), which is where session and credential data belongs. This is a deliberate deviation from the "new table means update backup export and restore" sync-pair rule, made for security.
+
+New env vars (see docs/installation.md): BETTER_AUTH_SECRET (required in production), BETTER_AUTH_URL (default http://localhost:3000), BETTER_AUTH_TRUSTED_ORIGINS (comma-separated, default the baseURL), plus SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD / SEED_ADMIN_NAME for the seed script. Cookies are deliberately non-secure (advanced.useSecureCookies false) because the farm runs over plain HTTP on a LAN; every LAN origin that will POST must appear in BETTER_AUTH_TRUSTED_ORIGINS or Better Auth rejects it as a CSRF failure.
+
+Testing note: the repo's jest runs CommonJS and cannot import the ESM-only Better Auth without VM-modules flags that would disturb the existing suites, so coverage is split. server/tests/auth-middleware.test.js unit-tests the middleware factories (401 without a session, 403 operator-versus-admin, pass-through and req.user attach with a valid session, thrown getSession treated as unauthenticated) against a stubbed getSession, and scripts/auth-smoke.mjs (npm run test:auth-smoke) boots the real library against a temp sqlite file and exercises sign-in, cookie issuance, getSession, admin-versus-operator enforcement, and disabled public sign-up end to end. Both are green. This is library integration proven against the real package, not hardware.
+
+### Changes
+- package.json: pin better-auth 1.6.23 exact (no caret); add test:auth-smoke and seed-admin scripts.
+- client/package.json: add better-auth 1.6.23 exact for the React client.
+- server/auth.mjs: new. Builds the Better Auth instance (email/password, disabled sign-up, admin plugin with admin/operator roles, LAN-safe non-secure cookies, 5 minute session cookie cache) against the app database; exports a buildAuth(database) builder so tests and the smoke script can inject an isolated database.
+- server/db.js: additive block creating the user/session/account/verification tables and admin-plugin columns via CREATE TABLE IF NOT EXISTS (the house migration pattern). Nothing else in the file changed.
+- server/index.js: async bootstrap that dynamic-imports auth.mjs, mounts the auth handler before express.json(), applies require-auth to all /api/* except /api/auth/* and /api/health, and gates admin-only endpoints via an explicit table.
+- server/middleware/require-auth.js, server/middleware/require-role.js: new session-resolving and role-gating middleware factories.
+- scripts/seed-admin.mjs: new. Creates the first admin from env vars via the server-side createUser path; refuses to run if the email already exists; prints no secrets.
+- scripts/auth-smoke.mjs: new. End-to-end smoke test of the real Better Auth instance.
+- server/tests/auth-middleware.test.js: new. Unit tests for the middleware factories.
+- client/src/lib/authClient.js: new. Better Auth React client with the admin plugin, same-origin.
+- client/src/pages/Login.jsx: new. Email and password login page in the house dark palette, works at the 600px breakpoint.
+- client/src/pages/Users.jsx: new. Admin user management (list, create with role, set role, ban/unban, remove with confirm).
+- client/src/App.jsx: session guard (loading, then Login when unauthenticated), Users route and nav entry gated to admins, sign-out button.
+- docs/internal/better-auth-schema.sql: new. Reference copy of the CLI-generated auth schema.
+- docs/api.md: new Authentication section (auth endpoints, cookie behavior, 401/403 semantics, role table, env vars).
+- docs/installation.md: auth env vars and the first-admin seed step.
+- docs/server.md: middleware order and the auth bootstrap documented; env var table updated.
+- docs/database.md: auth tables documented.
+- docs/README.md: note the auth tables and the reference schema file.
+- docs/CHANGELOG.md: this entry.
+
+---
+
 ## 2026-07-12: Scheduler dispatch and recovery regression suite
 
 Test-only change, no runtime behavior is modified. This is the internal fork's PR 1: before any of the fork's feature PRs (auth, credential redaction, header parser) touch the codebase, we lock the scheduler's current correct dispatch, hold, and recovery behavior with regression tests so a later change that breaks a safety invariant fails CI instead of shipping. The coverage targets come from the Phase 0 audit gap analysis (docs/internal/audit-findings.md), which flagged the hold gate (finding 33) and the dispatch-lock, ceiling, and restart-recovery paths as the highest untested risks.

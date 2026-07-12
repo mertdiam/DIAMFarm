@@ -167,6 +167,19 @@ CREATE TABLE IF NOT EXISTS printer_events (
 
 **Backfill migration:** on first server start after this table was introduced, any printer with `is_active = 0` and `decommissioned_at` set automatically receives a synthetic `decommission` event using the stored timestamp and note — idempotent across restarts.
 
+### Better Auth tables (user, session, account, verification)
+
+Authentication is provided by Better Auth (pinned to 1.6.23), which stores its data in this same SQLite database. These four tables and the admin plugin's extra columns are created by `db.js` in the house `CREATE TABLE IF NOT EXISTS` pattern, exactly like every other table, so a `git pull` plus restart applies them with no migration CLI and no data loss on existing installs. Better Auth reads and writes them through the same `better-sqlite3` handle via its Kysely adapter.
+
+Column names keep Better Auth's exact quoted camelCase (for example `emailVerified`, `createdAt`, `userId`) because the adapter references them verbatim. The generated reference DDL is committed at `docs/internal/better-auth-schema.sql`; the `db.js` block is a hand-translation of it.
+
+- `user`: accounts. Admin plugin adds `role` (TEXT, comma-joined when a user holds more than one role), `banned`, `banReason`, `banExpires`.
+- `session`: active sessions. Admin plugin adds `impersonatedBy`.
+- `account`: credential records; the bcrypt password hash lives here in `password`.
+- `verification`: short-lived verification values.
+
+Do not add these tables to the JSON backup (`routes/backup.js`). That export is a downloadable file; password hashes and session tokens must never leave in it, and session/verification rows are meaningless to restore. Auth data is covered by a file-level copy of `farm.db` instead. This is a deliberate exception to the "new table means update backup export and restore" rule.
+
 ## Conventions
 
 - All IDs: `INTEGER PRIMARY KEY AUTOINCREMENT`
