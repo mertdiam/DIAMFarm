@@ -88,7 +88,8 @@ beforeEach(() => {
       material_grams    REAL,
       allowed_groups    TEXT,
       required_material TEXT,
-      required_color    TEXT
+      required_color    TEXT,
+      header_meta       TEXT
     );
     CREATE TABLE jobs (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,11 +152,11 @@ beforeEach(() => {
   db.prepare(`
     INSERT INTO gcodes
       (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, created_at,
-       ams_slot, material_grams, allowed_groups, required_material, required_color)
+       ams_slot, material_grams, allowed_groups, required_material, required_color, header_meta)
     VALUES
       (1, 'x1c', 'part.gcode', 'part_stub.gcode', 4, 3600, ?,
-       2, 45.5, '["Bambu Farm"]', 'PETG', 'Red')
-  `).run(now);
+       2, 45.5, '["Bambu Farm"]', 'PETG', 'Red', ?)
+  `).run(now, JSON.stringify({ format: '3mf', slicer: 'BambuStudio', printer_model_id: 'BL-P001', estimated_time_s: 3600 }));
 
   // Two types/colors (not one) so a restore that gets the filament_colors -> filament_types
   // FK order wrong, or maps a color to the wrong type, doesn't slip through by coincidence.
@@ -207,6 +208,8 @@ describe('Backup export/restore — column round-trip regression', () => {
       allowed_groups: '["Bambu Farm"]',
       required_material: 'PETG',
       required_color: 'Red',
+      // header_meta is exported verbatim as the stored JSON text, not re-shaped.
+      header_meta: JSON.stringify({ format: '3mf', slicer: 'BambuStudio', printer_model_id: 'BL-P001', estimated_time_s: 3600 }),
     });
   });
 
@@ -221,7 +224,7 @@ describe('Backup export/restore — column round-trip regression', () => {
       db.prepare("UPDATE printers SET serial_number = '', loaded_material = NULL, loaded_color = NULL").run();
       db.prepare("UPDATE projects SET required_material = NULL, required_color = NULL").run();
       db.prepare("UPDATE parts SET print_time_seconds = NULL, material_grams = NULL").run();
-      db.prepare("UPDATE gcodes SET ams_slot = NULL, material_grams = NULL, allowed_groups = NULL, required_material = NULL, required_color = NULL").run();
+      db.prepare("UPDATE gcodes SET ams_slot = NULL, material_grams = NULL, allowed_groups = NULL, required_material = NULL, required_color = NULL, header_meta = NULL").run();
 
       const restoreRes = await request(app)
         .post('/api/backup/restore')
@@ -249,6 +252,8 @@ describe('Backup export/restore — column round-trip regression', () => {
       expect(gcode.allowed_groups).toBe('["Bambu Farm"]');
       expect(gcode.required_material).toBe('PETG');
       expect(gcode.required_color).toBe('Red');
+      // header_meta round-trips as the stored JSON text and re-parses to the original object.
+      expect(JSON.parse(gcode.header_meta)).toEqual({ format: '3mf', slicer: 'BambuStudio', printer_model_id: 'BL-P001', estimated_time_s: 3600 });
     } finally {
       fs.unlinkSync(backupFile);
     }

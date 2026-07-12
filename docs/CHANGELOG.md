@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-07-12: G-code and 3MF header metadata extraction on upload
+
+Uploading a G-code or 3MF file now extracts the slicer metadata embedded in it (printer model, nozzle diameter, filament type/color, estimated print time, layer height, layer count, filament used in grams and millimeters) and stores it alongside the G-code record. This is display and future-dispatch-matching groundwork: the upload UI shows a one-line recap of what the parser found, and the parsed object rides along in the G-code API responses. Auto-matching a part to a printer from this data is deliberately out of scope here (detection and display only).
+
+The parser lives in `server/lib/headerParser.js` and follows `docs/internal/header-parser-spec.md` exactly. It never reads a whole file: it sniffs the first 8 bytes, reads the first and last 512 KB of ASCII G-code, and for 3MF opens only the named ZIP entries it needs via `yauzl` (random access, so a large 3MF costs only the size of the entries actually read). It never throws and never fails an upload: any read error, unrecognized format, or missing field yields a null-filled result plus a `format` tag and a `warnings` note, and the upload proceeds regardless.
+
+Formats covered: Bambu Studio and OrcaSlicer G-code (BBL and non-BBL print targets), PrusaSlicer G-code, sliced and unsliced 3MF (Bambu `slice_info.config` / `project_settings.config`, with a plate-gcode fallback), PrusaSlicer 3MF config, binary G-code (`.bgcode`, detected by magic bytes and not parsed), and third-party or stripped files (null-filled with a warning).
+
+The parser is implemented from verified format research with synthetic fixtures built strictly from the spec's verbatim examples. The fixtures prove the parser matches the documented format; they do not prove the documented format is what a current slicer install writes today. Real sliced files (at least the Bambu ones) must be collected and added to `server/tests/fixtures/gcode/` before this parser's output is trusted against real hardware.
+
+### Changes
+- `server/lib/headerParser.js`: new module exporting `async parseHeader(filePath)`; detection, extraction, normalization, and null-fill per the spec.
+- `package.json`: added `yauzl` pinned to exact `3.4.0` (escalation-approved in the spec) for random-access 3MF/ZIP entry reads.
+- `server/db.js`: additive migration `ALTER TABLE gcodes ADD COLUMN header_meta TEXT`.
+- `server/routes/gcodes.js`: upload endpoint calls `parseHeader` and stores the JSON result in `header_meta` (parse failure never fails the upload); GET/list and PUT responses expose `header_meta` as a parsed object (or null).
+- `client/src/pages/Projects.jsx`: after a successful upload, shows a compact one-line slicer-header recap (printer model, filament type, layer height, humanized estimated time) under the upload panel.
+- `server/tests/headerParser.test.js`: new suite covering each fixture, the never-throws contract, and the dhms and meters-to-mm conversions.
+- `server/tests/fixtures/gcode/`: new synthetic fixtures (Bambu BBL, Orca BBL, Orca non-BBL, PrusaSlicer, third-party, bgcode stub, sliced 3MF, unsliced 3MF, corrupt zip).
+- `server/tests/gcodes.test.js`, `server/tests/gcodes-targeting.test.js`, `server/tests/backup-restore.test.js`: inline schemas gain `header_meta`; gcodes and backup-restore suites seed and assert the new column round-trips.
+- `docs/api.md`, `docs/server.md`: documented `header_meta` on the G-code endpoints and the parser module.
+
+---
+
 ## 2026-07-07 — Dockerized development workflow (`dev` profile)
 
 Following up on issue #15 (developer couldn't get a containerized dev environment running: `ERROR: client/dist/index.html not found` when trying to run the server for local dev) and the maintainer's own admission there that the `Dockerfile` "was just focused on production... I've been lazy to put together a development target" — added a Docker-based alternative to the native `npm run dev` workflow. Purely additive: the native workflow in the README/Installation Guide is unchanged, and the production `docker compose up` path is unchanged (still builds the same `runtime` target it always has, now pinned explicitly).

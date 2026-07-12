@@ -43,6 +43,7 @@ beforeAll(() => {
       allowed_groups TEXT,
       required_material TEXT,
       required_color TEXT,
+      header_meta TEXT,
       created_at INTEGER NOT NULL
     );
     CREATE TABLE printers (
@@ -80,6 +81,8 @@ beforeAll(() => {
   db.exec(`INSERT INTO printer_models VALUES ('x1c',  'X1 Carbon',  'bambu')`);
   db.exec(`INSERT INTO printer_models VALUES ('a1',   'A1',         'bambu')`);
   db.exec(`INSERT INTO printer_models VALUES ('p1s',  'P1S',        'bambu')`);
+  db.exec(`INSERT INTO printer_models VALUES ('h2d',  'H2D',        'bambu')`);
+  db.exec(`INSERT INTO printer_models VALUES ('p2s',  'P2S',        'bambu')`);
 
   if (!fs.existsSync(GCODE_DIR)) fs.mkdirSync(GCODE_DIR, { recursive: true });
 
@@ -265,6 +268,52 @@ describe('POST /api/gcodes/upload', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.ams_slot).toBeNull();
+    uploadedPath = res.body.filepath;
+  });
+
+  test('stores parsed header_meta on upload and returns it as an object', async () => {
+    // Upload a real Bambu BBL fixture so the parser has genuine metadata to extract.
+    const fixturePath = path.join(__dirname, 'fixtures', 'gcode', 'bambu_bbl.gcode');
+
+    const res = await request(app)
+      .post('/api/gcodes/upload')
+      .attach('file', fixturePath)
+      .field('part_id', '1')
+      .field('parts_per_plate', '1')
+      .field('printer_model', 'h2d'); // distinct model to avoid the (part_id, model) 409
+
+    expect(res.status).toBe(201);
+    expect(res.body.header_meta).toBeTruthy();
+    expect(res.body.header_meta.format).toBe('gcode');
+    expect(res.body.header_meta.slicer).toBe('BambuStudio');
+    expect(res.body.header_meta.printer_model).toBe('Bambu Lab A1 mini');
+    expect(res.body.header_meta.estimated_time_s).toBe(369);
+    uploadedPath = res.body.filepath;
+
+    // The list endpoint must also expose header_meta as a parsed object, not raw JSON text.
+    const list = await request(app).get('/api/gcodes?part_id=1');
+    const row = list.body.find(g => g.filepath === res.body.filepath);
+    expect(row).toBeTruthy();
+    expect(typeof row.header_meta).toBe('object');
+    expect(row.header_meta.slicer).toBe('BambuStudio');
+  });
+
+  test('upload of an unparseable file still succeeds with a null-filled header_meta', async () => {
+    // "fake gcode content" has no recognized markers: parse must not fail the upload.
+    const tmpFile = makeTempGcode('stripped_upload.gcode');
+
+    const res = await request(app)
+      .post('/api/gcodes/upload')
+      .attach('file', tmpFile)
+      .field('part_id', '1')
+      .field('parts_per_plate', '1')
+      .field('printer_model', 'p2s'); // distinct model to avoid 409
+
+    fs.unlinkSync(tmpFile);
+
+    expect(res.status).toBe(201);
+    expect(res.body.header_meta.format).toBe('gcode');
+    expect(res.body.header_meta.slicer).toBeNull();
     uploadedPath = res.body.filepath;
   });
 

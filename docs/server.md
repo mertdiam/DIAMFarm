@@ -80,4 +80,19 @@ app.use('/api/printers', printersRouter);
 | `papaparse` | ^5.4.1 | CSV parsing for printer import |
 | `axios` | ^1.7.2 | HTTP client for PrusaLink API calls |
 | `form-data` | ^4.0.0 | Multipart form construction for G-code uploads to PrusaLink |
+| `yauzl` | 3.4.0 | Random-access ZIP entry reads for the 3MF header parser (pinned exact, pure JS, no native build) |
 | `concurrently` | ^8.2.2 | Runs server + client together via `npm run dev` |
+
+## G-code header metadata (`header_meta`)
+
+`server/lib/headerParser.js` exports one async function, `parseHeader(filePath)`, which extracts slicer metadata from an uploaded G-code or 3MF file. `server/routes/gcodes.js` calls it on upload and stores the JSON result in the additive `gcodes.header_meta` column; G-code responses expose it as a parsed object (or `null`).
+
+Key properties:
+
+- **Never blocks or fails an upload.** Any read error, unrecognized format, or missing field yields a null-filled result plus a `warnings` note; the upload proceeds regardless. The route also wraps the call so a thrown exception is treated the same as a null result.
+- **Never reads a whole file.** It sniffs the first 8 bytes (`PK\x03\x04` for 3MF, `GCDE` for binary G-code, otherwise ASCII), reads the first and last 512 KB of ASCII G-code, and for 3MF opens only the named ZIP entries it needs via `yauzl`.
+- **Flat, fully-shaped result.** Every key is always present: `format`, `slicer`, `slicer_version`, `printer_model`, `printer_model_id`, `nozzle_diameters`, `filament_types`, `filament_colors`, `estimated_time_s`, `layer_height_mm`, `total_layers`, `filament_used_g`, `filament_used_mm`, `warnings`. Scalars default to `null`, lists to `[]`. Times are whole seconds; 3MF filament usage is converted from meters to millimeters.
+
+Formats covered: Bambu Studio and OrcaSlicer G-code (BBL and non-BBL targets), PrusaSlicer G-code, sliced and unsliced Bambu 3MF, PrusaSlicer 3MF config, binary G-code (detected only), and third-party or stripped files (null-filled). The full extraction contract lives in `docs/internal/header-parser-spec.md` (fork-internal, not part of the public docs index).
+
+Hardware-validation status: implemented from verified format research and tested against synthetic fixtures only. Real sliced files must be collected before the output is trusted against real hardware.
